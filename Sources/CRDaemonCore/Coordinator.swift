@@ -36,6 +36,9 @@ public final class Coordinator {
     private let retryCooldown: TimeInterval = 300
     /// label → profile routes that validated to the reviewer login at startup.
     private var activeTierProfiles: [String: String] = [:]
+    /// Review-comment thread roots we've already notified about (in-memory).
+    private var seenReplyThreadIDs: Set<Int> = []
+    private var nextReplyCheckAt: Date = .distantPast
 
     public init(
         config: Config,
@@ -153,6 +156,12 @@ public final class Coordinator {
                 nextPollAt = now.addingTimeInterval(jitteredInterval())
             }
             onChange?()
+        }
+
+        // Watch for human replies to our review threads (#326), on a slow cadence.
+        if identityOK, !runner.isRunning, now >= nextReplyCheckAt {
+            nextReplyCheckAt = now.addingTimeInterval(300)
+            await checkThreadReplies()
         }
 
         await processQueueStep()
@@ -326,6 +335,40 @@ public final class Coordinator {
                     $0.state = .pending
                     $0.crPid = nil
                     $0.lastError = "recovered after interruption — re-queued"
+                }
+            }
+        }
+        onChange?()
+    }
+
+    // MARK: - Thread replies (#326)
+
+    /// Detect human replies to review threads the reviewer started on recently
+    /// reviewed PRs, and surface them (notification + event). This is the trigger
+    /// half of conversational replies; generating + posting the reply is the next
+    /// increment (the cr engine).
+    private func checkThreadReplies() async {
+        let cutoff = nowFn().addingTimeInterval(-24 * 3600)
+        let recent = store.all().filter {
+            $0.state == .done && ($0.finishedAt ?? .distantPast) >= cutoff
+        }
+        for assignment in recent {
+            let threads = try? await client.unansweredReplyThreads(
+                assignment.key, reviewerLogin: config.reviewerLogin)
+            for thread in threads ?? [] where !seenReplyThreadIDs.contains(thread.rootCommentID) {
+                seenReplyThreadIDs.insert(thread.rootCommentID)
+                log.info(
+                    "thread.reply", ["pr": assignment.key.description, "from": thread.lastReplyAuthor])
+                store.appendEvent(
+                    "thread.reply",
+                    [
+                        "pr": assignment.key.description, "from": thread.lastReplyAuthor,
+                        "comment": thread.rootCommentID,
+                    ])
+                if config.notifyOn.findings {
+                    notify(
+                        "New reply on \(assignment.key)",
+                        "\(thread.lastReplyAuthor): \(String(thread.lastReplyBody.prefix(80)))")
                 }
             }
         }

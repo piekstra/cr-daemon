@@ -22,6 +22,22 @@ public struct SearchPR: Sendable, Equatable {
     }
 }
 
+/// A review-comment thread the reviewer started where a human has replied and
+/// the reviewer hasn't responded yet — the trigger for conversational replies.
+public struct ReplyThread: Sendable, Equatable {
+    public let rootCommentID: Int
+    public let path: String?
+    public let lastReplyAuthor: String
+    public let lastReplyBody: String
+
+    public init(rootCommentID: Int, path: String?, lastReplyAuthor: String, lastReplyBody: String) {
+        self.rootCommentID = rootCommentID
+        self.path = path
+        self.lastReplyAuthor = lastReplyAuthor
+        self.lastReplyBody = lastReplyBody
+    }
+}
+
 /// Detail fetched from the PR endpoint (core bucket).
 public struct PullRequestDetail: Sendable, Equatable {
     public let key: PRKey
@@ -314,5 +330,57 @@ public actor GitHubClient {
                     labels: labels))
         }
         return out
+    }
+
+    /// Open review-comment threads on a PR that `reviewerLogin` started and a
+    /// human last replied to (the reviewer hasn't answered). Core bucket.
+    public func unansweredReplyThreads(_ key: PRKey, reviewerLogin: String) async throws
+        -> [ReplyThread]
+    {
+        let resp = try await request(
+            path: "/repos/\(key.owner)/\(key.repo)/pulls/\(key.number)/comments",
+            query: [URLQueryItem(name: "per_page", value: "100")],
+            resource: .core, useConditional: false)
+        return Self.parseUnansweredReplyThreads(resp.data, reviewerLogin: reviewerLogin)
+    }
+
+    /// Parse PR review comments into threads where `reviewerLogin` started the
+    /// thread and the most recent comment is from someone else. Pure + static.
+    public static func parseUnansweredReplyThreads(_ data: Data, reviewerLogin: String)
+        -> [ReplyThread]
+    {
+        guard let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+        // Group comments by thread root (in_reply_to_id, or the comment's own id).
+        var threads: [Int: [[String: Any]]] = [:]
+        for c in arr {
+            guard let id = c["id"] as? Int else { continue }
+            let root = (c["in_reply_to_id"] as? Int) ?? id
+            threads[root, default: []].append(c)
+        }
+        let iso = ISO8601DateFormatter()
+        func date(_ c: [String: Any]) -> Date {
+            (c["created_at"] as? String).flatMap { iso.date(from: $0) } ?? .distantPast
+        }
+        func login(_ c: [String: Any]) -> String {
+            (c["user"] as? [String: Any])?["login"] as? String ?? ""
+        }
+        var out: [ReplyThread] = []
+        for (rootID, comments) in threads {
+            let sorted = comments.sorted { date($0) < date($1) }
+            guard let root = sorted.first(where: { ($0["id"] as? Int) == rootID }) ?? sorted.first
+            else { continue }
+            guard login(root).caseInsensitiveCompare(reviewerLogin) == .orderedSame else { continue }
+            guard let last = sorted.last else { continue }
+            if login(last).caseInsensitiveCompare(reviewerLogin) != .orderedSame {
+                out.append(
+                    ReplyThread(
+                        rootCommentID: rootID, path: root["path"] as? String,
+                        lastReplyAuthor: login(last),
+                        lastReplyBody: (last["body"] as? String) ?? ""))
+            }
+        }
+        return out.sorted { $0.rootCommentID < $1.rootCommentID }
     }
 }

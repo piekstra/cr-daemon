@@ -8,5 +8,6 @@ runQueueStoreTests()
 runModelsTests()
 runSearchParsingTests()
 runSupervisorTests()
+runReplyThreadTests()
 
 suite.finish()
