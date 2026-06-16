@@ -49,6 +49,14 @@ public final class Coordinator {
     private var seenReplyThreadIDs: Set<Int> = []
     private var nextReplyCheckAt: Date = .distantPast
     private var replyCheckInFlight = false
+    /// #326 reply-check is disabled by default: it triggered a recurring control-
+    /// loop stall that resisted root-causing even after bounding client timeouts
+    /// and detaching the call. Re-enable once the wedge is understood.
+    private let replyCheckEnabled = false
+    /// Wall-clock of the last completed poll; the watchdog uses it to detect a
+    /// wedged loop.
+    private var lastPollAt: Date = .distantPast
+    private var watchdogTask: Task<Void, Never>?
 
     public init(
         config: Config,
@@ -121,11 +129,52 @@ public final class Coordinator {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
+
+        lastPollAt = nowFn()
+        startWatchdog()
     }
 
     public func stop() {
         loopTask?.cancel()
+        watchdogTask?.cancel()
         monitor.stop()
+    }
+
+    // MARK: - Watchdog
+
+    /// Independent safety net. If the control loop goes silent while it should be
+    /// polling (not reviewing, online, not paused/rate-limited), exit so launchd
+    /// relaunches us into a clean, reconciled state. Guarantees the daemon
+    /// self-heals from any loop wedge regardless of cause — a stall must never be
+    /// a permanent outage. Runs detached so a busy main actor can't disable it.
+    private func startWatchdog() {
+        watchdogTask = Task.detached { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard let self else { return }
+                if await self.controlLoopWedged() { await self.recoverFromWedge() }
+            }
+        }
+    }
+
+    private func controlLoopWedged() -> Bool {
+        guard !runner.isRunning, !config.paused, monitor.isOnline, !safeMode else { return false }
+        if let until = rateLimitedUntil, nowFn() < until { return false }
+        // Polls run every ~searchPollIntervalSeconds (default 90s). Five minutes of
+        // silence while idle means the loop is wedged, not merely between polls.
+        return nowFn().timeIntervalSince(lastPollAt) > 300
+    }
+
+    private func recoverFromWedge() {
+        log.error(
+            "watchdog.wedged",
+            [
+                "last_poll_age_s": Int(nowFn().timeIntervalSince(lastPollAt)),
+                "action": "exit_for_relaunch",
+            ])
+        // Non-zero exit → launchd (KeepAlive SuccessfulExit=false) relaunches us;
+        // startup reconciliation recovers any interrupted review.
+        exit(1)
     }
 
     // MARK: - Control loop
@@ -165,6 +214,7 @@ public final class Coordinator {
             } else {
                 nextPollAt = now.addingTimeInterval(jitteredInterval())
             }
+            lastPollAt = now
             onChange?()
         }
 
@@ -173,7 +223,9 @@ public final class Coordinator {
         // never block the poll+review loop (it once wedged the daemon for ~50min,
         // because this was awaited inline). Bounded client timeouts guarantee the
         // detached task always completes and clears the flag.
-        if identityOK, !runner.isRunning, !replyCheckInFlight, now >= nextReplyCheckAt {
+        if replyCheckEnabled, identityOK, !runner.isRunning, !replyCheckInFlight,
+            now >= nextReplyCheckAt
+        {
             nextReplyCheckAt = now.addingTimeInterval(300)
             replyCheckInFlight = true
             Task { [weak self] in
