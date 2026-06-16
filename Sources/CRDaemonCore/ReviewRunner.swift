@@ -18,6 +18,7 @@ public final class ReviewRunner: @unchecked Sendable {
     private let profile: String
     private let timeout: TimeInterval
     private let log: Logger
+    private let childEnv: [String: String]
 
     private let lock = NSLock()
     private var currentProcess: Process?
@@ -33,6 +34,29 @@ public final class ReviewRunner: @unchecked Sendable {
         self.profile = profile
         self.timeout = timeout
         self.log = log
+        self.childEnv = ReviewRunner.childEnvironment()
+    }
+
+    /// Environment for `cr` (and the `claude`/`git`/`gh` it shells out to).
+    /// launchd starts the daemon with a minimal PATH that omits user tool dirs,
+    /// so we prepend the common ones — otherwise `cr`'s LLM adapter can't find
+    /// `claude` ("executable file not found in $PATH"). We start from the full
+    /// inherited environment and only adjust PATH.
+    static func childEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        let home = env["HOME"] ?? NSHomeDirectory()
+        let prepend = [
+            "\(home)/.local/bin",
+            "\(home)/.bun/bin",
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+        ]
+        let existing = (env["PATH"] ?? "").split(separator: ":").map(String.init)
+        var seen = Set<String>()
+        env["PATH"] = (prepend + existing).filter { seen.insert($0).inserted }.joined(separator: ":")
+        return env
     }
 
     /// Locate the `cr` binary. Homebrew installs to /opt/homebrew/bin on Apple
@@ -62,7 +86,8 @@ public final class ReviewRunner: @unchecked Sendable {
     /// can't be resolved. The Coordinator refuses to run reviews unless this
     /// equals the configured reviewer login (so cr never self-reviews as you).
     public func resolvedIdentity() -> String? {
-        let r = Subprocess.run(crPath, ["me", "--profile", profile, "--json"], timeout: 30)
+        let r = Subprocess.run(
+            crPath, ["me", "--profile", profile, "--json"], timeout: 30, environment: childEnv)
         guard r.succeeded,
             let obj = try? JSONSerialization.jsonObject(with: Data(r.stdout.utf8)) as? [String: Any],
             let profiles = obj["profiles"] as? [[String: Any]],
@@ -73,7 +98,7 @@ public final class ReviewRunner: @unchecked Sendable {
 
     /// `cr` version string (for drift detection / logging).
     public func crVersion() -> String {
-        Subprocess.run(crPath, ["version"], timeout: 10)
+        Subprocess.run(crPath, ["version"], timeout: 10, environment: childEnv)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -108,7 +133,7 @@ public final class ReviewRunner: @unchecked Sendable {
         await withCheckedContinuation { (cont: CheckedContinuation<RunResult, Never>) in
             DispatchQueue.global().async { [self] in
                 let r = Subprocess.run(
-                    crPath, args, timeout: timeout,
+                    crPath, args, timeout: timeout, environment: childEnv,
                     onLaunch: { proc in
                         self.lock.lock()
                         self.currentProcess = proc
