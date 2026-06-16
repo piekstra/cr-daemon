@@ -117,6 +117,7 @@ conservative.
 | `per_pr_attempt_cap` | `3` | Attempts before a PR is quarantined as failed |
 | `daily_review_cap` | `50` | Global runaway guard |
 | `author_allowlist` | `null` | If set, only act on PRs by these authors |
+| `tier_label_profiles` | `{cr:large→reviewer-large}` | PR label → cr profile, to route a tagged PR to a deeper model tier ([docs/agents.md](docs/agents.md#deeper-reviews-on-demand-the-crlarge-label)) |
 | `notify_on` | all `true` | macOS notifications for approvals / findings / errors |
 | `paused` | `false` | Master pause |
 

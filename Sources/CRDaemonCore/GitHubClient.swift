@@ -7,13 +7,18 @@ public struct SearchPR: Sendable, Equatable {
     public let title: String
     public let author: String?
     public let updatedAt: Date?
+    public let labels: [String]
 
-    public init(key: PRKey, url: String, title: String, author: String?, updatedAt: Date?) {
+    public init(
+        key: PRKey, url: String, title: String, author: String?, updatedAt: Date?,
+        labels: [String] = []
+    ) {
         self.key = key
         self.url = url
         self.title = title
         self.author = author
         self.updatedAt = updatedAt
+        self.labels = labels
     }
 }
 
@@ -301,8 +306,12 @@ public actor GitHubClient {
             let title = item["title"] as? String ?? ""
             let author = (item["user"] as? [String: Any])?["login"] as? String
             let updated = (item["updated_at"] as? String).flatMap { iso.date(from: $0) }
+            let labels = (item["labels"] as? [[String: Any]])?
+                .compactMap { $0["name"] as? String } ?? []
             out.append(
-                SearchPR(key: key, url: html, title: title, author: author, updatedAt: updated))
+                SearchPR(
+                    key: key, url: html, title: title, author: author, updatedAt: updated,
+                    labels: labels))
         }
         return out
     }

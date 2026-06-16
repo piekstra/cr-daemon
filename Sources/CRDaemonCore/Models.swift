@@ -71,6 +71,8 @@ public struct Assignment: Codable, Equatable, Sendable {
     public var awaitingConfirm: Bool?
     /// Short human-facing summary of the last run (dry-run plan or result tail).
     public var lastSummary: String?
+    /// GitHub labels on the PR (used to route, e.g. `cr:large` → Opus profile).
+    public var labels: [String]?
 
     public var discoveredAt: Date
     public var startedAt: Date?
@@ -83,7 +85,7 @@ public struct Assignment: Codable, Equatable, Sendable {
         headShaReviewed: String? = nil, crPid: Int32? = nil, runToken: String? = nil,
         attempts: Int = 0, lastError: String? = nil, lastExitCode: Int32? = nil,
         lastOutcome: ReviewOutcome? = nil, awaitingConfirm: Bool? = nil, lastSummary: String? = nil,
-        discoveredAt: Date, startedAt: Date? = nil,
+        labels: [String]? = nil, discoveredAt: Date, startedAt: Date? = nil,
         finishedAt: Date? = nil, updatedAt: Date
     ) {
         self.key = key
@@ -102,6 +104,7 @@ public struct Assignment: Codable, Equatable, Sendable {
         self.lastOutcome = lastOutcome
         self.awaitingConfirm = awaitingConfirm
         self.lastSummary = lastSummary
+        self.labels = labels
         self.discoveredAt = discoveredAt
         self.startedAt = startedAt
         self.finishedAt = finishedAt

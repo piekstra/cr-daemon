@@ -127,6 +127,7 @@ public final class QueueStore: @unchecked Sendable {
                 existing.title = pr.title
                 existing.author = pr.author
                 existing.org = org
+                existing.labels = pr.labels
                 existing.updatedAt = now()
                 if existing.state == .done || existing.state == .skipped {
                     existing.state = .pending
@@ -141,7 +142,7 @@ public final class QueueStore: @unchecked Sendable {
             }
             let a = Assignment(
                 key: pr.key, url: pr.url, org: org, title: pr.title, author: pr.author,
-                state: .pending, discoveredAt: now(), updatedAt: now())
+                state: .pending, labels: pr.labels, discoveredAt: now(), updatedAt: now())
             byKey[id] = a
             appendEventLocked("assignment.discovered", ["pr": id, "author": pr.author ?? ""])
             persistLocked()

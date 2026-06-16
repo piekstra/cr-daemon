@@ -85,9 +85,10 @@ public final class ReviewRunner: @unchecked Sendable {
     /// The login `cr` would post as for the configured profile, or nil if it
     /// can't be resolved. The Coordinator refuses to run reviews unless this
     /// equals the configured reviewer login (so cr never self-reviews as you).
-    public func resolvedIdentity() -> String? {
+    public func resolvedIdentity(profile: String? = nil) -> String? {
         let r = Subprocess.run(
-            crPath, ["me", "--profile", profile, "--json"], timeout: 30, environment: childEnv)
+            crPath, ["me", "--profile", profile ?? self.profile, "--json"], timeout: 30,
+            environment: childEnv)
         guard r.succeeded,
             let obj = try? JSONSerialization.jsonObject(with: Data(r.stdout.utf8)) as? [String: Any],
             let profiles = obj["profiles"] as? [[String: Any]],
@@ -102,8 +103,11 @@ public final class ReviewRunner: @unchecked Sendable {
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    public func runReview(url: String, dryRun: Bool = false, rerun: Bool = false) async -> RunResult {
-        var args = ["review", url, "--profile", profile, "--json", "--max-concurrency", "1"]
+    public func runReview(
+        url: String, profile: String? = nil, dryRun: Bool = false, rerun: Bool = false
+    ) async -> RunResult {
+        let p = profile ?? self.profile
+        var args = ["review", url, "--profile", p, "--json", "--max-concurrency", "1"]
         if dryRun { args.append("--dry-run") }
         if rerun { args.append("--rerun") }
         return await execute(args: args, key: PRKey.parse(url: url))
@@ -111,9 +115,9 @@ public final class ReviewRunner: @unchecked Sendable {
 
     /// Recovery-only: re-post any missing/failed required posts for an existing
     /// run without re-reviewing or re-checking approvals.
-    public func retryPosts(url: String) async -> RunResult {
+    public func retryPosts(url: String, profile: String? = nil) async -> RunResult {
         await execute(
-            args: ["review", url, "--profile", profile, "--json", "--retry-posts"],
+            args: ["review", url, "--profile", profile ?? self.profile, "--json", "--retry-posts"],
             key: PRKey.parse(url: url))
     }
 

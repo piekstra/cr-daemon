@@ -52,4 +52,38 @@ func runConfigTests() {
             .appendingPathComponent("nope-\(UUID().uuidString).json")
         suite.expect(Config.load(from: missing) == .default)
     }
+
+    suite.test("lenientDecodePreservesAndDefaults") {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("old-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        // Old-schema config: no tier_label_profiles, only a few fields set.
+        let json = #"{"reviewer_login":"bot","orgs":["acme"],"search_poll_interval_seconds":120}"#
+        try json.write(to: tmp, atomically: true, encoding: .utf8)
+
+        let c = Config.load(from: tmp)
+        suite.expect(c.reviewerLogin == "bot", "set field preserved")
+        suite.expect(c.orgs == ["acme"], "set field preserved")
+        suite.expect(c.searchPollIntervalSeconds == 120, "set field preserved")
+        suite.expect(c.crProfile == "reviewer", "missing field defaulted")
+        suite.expect(
+            c.tierLabelProfiles["cr:large"] == "reviewer-large", "new field defaulted, not reset")
+    }
+
+    suite.test("selectProfileByLabel") {
+        let map = ["cr:large": "reviewer-large"]
+        suite.expect(
+            Config.selectProfile(labels: ["cr:large"], tierMap: map, fallback: "reviewer")
+                == "reviewer-large")
+        suite.expect(
+            Config.selectProfile(labels: ["CR:LARGE"], tierMap: map, fallback: "reviewer")
+                == "reviewer-large", "case-insensitive")
+        suite.expect(
+            Config.selectProfile(labels: ["bug"], tierMap: map, fallback: "reviewer") == "reviewer")
+        suite.expect(
+            Config.selectProfile(labels: [], tierMap: map, fallback: "reviewer") == "reviewer")
+        suite.expect(
+            Config.selectProfile(labels: ["cr:large"], tierMap: [:], fallback: "reviewer")
+                == "reviewer", "empty map → fallback")
+    }
 }

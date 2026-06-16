@@ -46,6 +46,9 @@ public struct Config: Codable, Equatable, Sendable {
     public var paused: Bool
     /// If set, only PRs whose author is in this list are acted on (nil = any).
     public var authorAllowlist: [String]?
+    /// PR label → cr profile routing, so a tagged PR reviews at a different model
+    /// tier. Default maps `cr:large` to the `reviewer-large` (Opus) profile.
+    public var tierLabelProfiles: [String: String]
 
     public init(
         reviewerLogin: String = "piekstra-dev",
@@ -62,7 +65,8 @@ public struct Config: Codable, Equatable, Sendable {
         dailyReviewCap: Int = 50,
         notifyOn: NotifyOptions = NotifyOptions(),
         paused: Bool = false,
-        authorAllowlist: [String]? = nil
+        authorAllowlist: [String]? = nil,
+        tierLabelProfiles: [String: String] = ["cr:large": "reviewer-large"]
     ) {
         self.reviewerLogin = reviewerLogin
         self.reviewerKeychainAccount = reviewerKeychainAccount
@@ -79,6 +83,53 @@ public struct Config: Codable, Equatable, Sendable {
         self.notifyOn = notifyOn
         self.paused = paused
         self.authorAllowlist = authorAllowlist
+        self.tierLabelProfiles = tierLabelProfiles
+    }
+
+    /// Lenient decoder: any missing key falls back to its default, so adding a new
+    /// config field never breaks (or silently resets) an existing config.json.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Config.default
+        reviewerLogin = try c.decodeIfPresent(String.self, forKey: .reviewerLogin) ?? d.reviewerLogin
+        reviewerKeychainAccount =
+            try c.decodeIfPresent(String.self, forKey: .reviewerKeychainAccount)
+            ?? d.reviewerKeychainAccount
+        crProfile = try c.decodeIfPresent(String.self, forKey: .crProfile) ?? d.crProfile
+        orgs = try c.decodeIfPresent([String].self, forKey: .orgs) ?? d.orgs
+        autonomy = try c.decodeIfPresent(Autonomy.self, forKey: .autonomy) ?? d.autonomy
+        searchPollIntervalSeconds =
+            try c.decodeIfPresent(Int.self, forKey: .searchPollIntervalSeconds)
+            ?? d.searchPollIntervalSeconds
+        coreRateFloor = try c.decodeIfPresent(Int.self, forKey: .coreRateFloor) ?? d.coreRateFloor
+        searchRateFloor =
+            try c.decodeIfPresent(Int.self, forKey: .searchRateFloor) ?? d.searchRateFloor
+        maxConcurrentReviews =
+            try c.decodeIfPresent(Int.self, forKey: .maxConcurrentReviews) ?? d.maxConcurrentReviews
+        reviewTimeoutSeconds =
+            try c.decodeIfPresent(Int.self, forKey: .reviewTimeoutSeconds) ?? d.reviewTimeoutSeconds
+        perPrAttemptCap =
+            try c.decodeIfPresent(Int.self, forKey: .perPrAttemptCap) ?? d.perPrAttemptCap
+        dailyReviewCap =
+            try c.decodeIfPresent(Int.self, forKey: .dailyReviewCap) ?? d.dailyReviewCap
+        notifyOn = try c.decodeIfPresent(NotifyOptions.self, forKey: .notifyOn) ?? d.notifyOn
+        paused = try c.decodeIfPresent(Bool.self, forKey: .paused) ?? d.paused
+        authorAllowlist = try c.decodeIfPresent([String].self, forKey: .authorAllowlist)
+        tierLabelProfiles =
+            try c.decodeIfPresent([String: String].self, forKey: .tierLabelProfiles)
+            ?? d.tierLabelProfiles
+    }
+
+    /// Pick the cr profile for a PR given its labels. Falls back to `fallback`
+    /// when no label matches. Deterministic when multiple labels match (sorted).
+    public static func selectProfile(
+        labels: [String], tierMap: [String: String], fallback: String
+    ) -> String {
+        let present = Set(labels.map { $0.lowercased() })
+        for label in tierMap.keys.sorted() where present.contains(label.lowercased()) {
+            return tierMap[label] ?? fallback
+        }
+        return fallback
     }
 
     public static let `default` = Config()

@@ -34,6 +34,8 @@ public final class Coordinator {
     private var nextPollAt: Date = .distantPast
     private var rateLimitedUntil: Date?
     private let retryCooldown: TimeInterval = 300
+    /// label → profile routes that validated to the reviewer login at startup.
+    private var activeTierProfiles: [String: String] = [:]
 
     public init(
         config: Config,
@@ -71,6 +73,25 @@ public final class Coordinator {
             runtimeState = .error(msg)
         }
         if safeMode { runtimeState = .safeMode(reason: "crash loop — auto-work paused") }
+
+        // Validate tier-routing profiles (e.g. cr:large → reviewer-large). Keep only
+        // those that resolve to the reviewer login; a bad/missing one is dropped so
+        // a labeled PR safely falls back to the default profile.
+        var validTiers: [String: String] = [:]
+        for (label, prof) in config.tierLabelProfiles {
+            if runner.resolvedIdentity(profile: prof)?.caseInsensitiveCompare(config.reviewerLogin)
+                == .orderedSame
+            {
+                validTiers[label] = prof
+            } else {
+                log.warn("tier_profile.invalid", ["label": label, "profile": prof])
+            }
+        }
+        activeTierProfiles = validTiers
+        if !validTiers.isEmpty {
+            log.info(
+                "tier_profiles.active", ["routes": validTiers.keys.sorted().joined(separator: ",")])
+        }
 
         monitor.onSleep = { [weak self] in Task { @MainActor in self?.handleSleep() } }
         monitor.onWake = { [weak self] in Task { @MainActor in self?.handleWake() } }
@@ -175,6 +196,9 @@ public final class Coordinator {
     private func runReview(_ assignment: Assignment, forceLive: Bool = false) async {
         let key = assignment.key
         let confirm = (config.autonomy == .confirm) && !forceLive
+        // Route by label (e.g. cr:large → Opus profile); falls back to the default.
+        let chosenProfile = Config.selectProfile(
+            labels: assignment.labels ?? [], tierMap: activeTierProfiles, fallback: config.crProfile)
         setState(.reviewing(key))
         let token = UUID().uuidString
         store.update(key) {
@@ -186,7 +210,8 @@ public final class Coordinator {
             $0.lastError = nil
         }
         store.recordReviewStart()
-        store.appendEvent("review.start", ["pr": key.description, "confirm": confirm])
+        store.appendEvent(
+            "review.start", ["pr": key.description, "confirm": confirm, "profile": chosenProfile])
         onChange?()
 
         if let detail = try? await client.pullRequest(key) {
@@ -202,7 +227,8 @@ public final class Coordinator {
         let priorReview = try? await client.latestReviewState(key, by: config.reviewerLogin)
         let needsRerun = priorReview?.uppercased() == "APPROVED"
 
-        let result = await runner.runReview(url: assignment.url, dryRun: confirm, rerun: needsRerun)
+        let result = await runner.runReview(
+            url: assignment.url, profile: chosenProfile, dryRun: confirm, rerun: needsRerun)
 
         if result.timedOut {
             finishFailure(key, exit: result.exitCode, error: "timed out", terminal: true)

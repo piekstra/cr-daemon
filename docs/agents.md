@@ -63,3 +63,35 @@ A healthy dry-run shows `Reviewers | <selected agents>` instead of `unavailable`
 - **Writing your own agents** (e.g. for your stack — Rust, Swift/AppKit, Tauri): agents are just
   `index.yaml` + `prompt.md` directories. See the format and contribution guidance in the
   [`codereview-cli`](https://github.com/open-cli-collective/codereview-cli) repo.
+
+## Deeper reviews on demand: the `cr:large` label
+
+Reviews run at the cr profile's model tier (Sonnet by default). To run a **specific** PR at the
+**large tier (Opus)** — for a tricky or high-stakes change — add the **`cr:large`** label when you
+request the review:
+
+```bash
+gh pr edit <PR> --add-label cr:large    # then request the reviewer as usual
+```
+
+cr-daemon reads each PR's labels from the Search results (no extra API call) and routes a tagged PR
+to a dedicated **`reviewer-large`** cr profile. The mapping lives in `config.json` and is
+extensible (e.g. add `cr:medium`):
+
+```json
+"tier_label_profiles": { "cr:large": "reviewer-large" }
+```
+
+Set the profile up once — it can reuse the same credential and agent source:
+
+```bash
+cr init --profile reviewer-large --replace-profile --non-interactive \
+  --git-host github.com --git-auth-mode pat --git-credential-ref codereview/reviewer \
+  --llm-adapter claude_cli --llm-auth subscription --llm-reviewer-model-tier large
+cr config agent-source add "$HOME/Library/Application Support/codereview/agents" --profile reviewer-large
+```
+
+The daemon **validates each tier profile at startup** (it must resolve to the reviewer login); a
+missing or wrong-identity profile is dropped and the PR falls back to the default profile. Because
+`cr config show` shows `large → claude-opus-4-8`, `cr:large` reviews run on Opus. They cost more and
+take longer, so keep the label opt-in for the PRs that warrant it.

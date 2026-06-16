@@ -17,6 +17,10 @@ func runSearchParsingTests() {
 
         let bob = prs.first { $0.key.description == "piekstra/govee-cli#7" }
         suite.expect(bob?.author == "contributor-bob")
+
+        let tagged = prs.first { $0.key.description == "open-cli-collective/codereview-cli#42" }
+        suite.expect(tagged?.labels.contains("cr:large") == true, "labels parsed")
+        suite.expect(bob?.labels.isEmpty == true, "no labels → empty")
     }
 
     suite.test("parseEmptyReturnsNil") {
