@@ -124,4 +124,25 @@ public enum RuntimeState: Equatable, Sendable {
     case backingOff(until: Date)     // circuit breaker open
     case safeMode(reason: String)    // crash-loop guard tripped
     case error(String)               // terminal config/auth problem
+
+    /// Compact, log-safe description (used for state-transition logging and the
+    /// menu-bar status line).
+    public var label: String {
+        switch self {
+        case .starting: return "starting"
+        case .active: return "active"
+        case .reviewing(let key): return "reviewing \(key.description)"
+        case .paused: return "paused"
+        case .offline: return "offline"
+        case .rateLimited(let until): return "rateLimited until \(Self.iso(until))"
+        case .backingOff(let until): return "backingOff until \(Self.iso(until))"
+        case .safeMode(let reason): return "safeMode (\(reason))"
+        case .error(let msg): return "error (\(msg))"
+        }
+    }
+
+    private static func iso(_ d: Date) -> String {
+        let f = ISO8601DateFormatter()
+        return f.string(from: d)
+    }
 }

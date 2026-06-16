@@ -15,7 +15,16 @@ public final class Coordinator {
     private let nowFn: () -> Date
 
     public private(set) var runtimeState: RuntimeState = .starting {
-        didSet { if runtimeState != oldValue { onStateChange?(runtimeState) } }
+        didSet {
+            if runtimeState != oldValue {
+                // Log every transition. The daemon spends most ticks silently
+                // returning early when offline/rate-limited (tick()), so without
+                // this a wedged-idle state is invisible in the log — exactly the
+                // case that made a poll-loop stall undiagnosable.
+                log.info("state.change", ["to": runtimeState.label, "from": oldValue.label])
+                onStateChange?(runtimeState)
+            }
+        }
     }
 
     // UI hooks (set by the AppKit shell).
@@ -150,8 +159,8 @@ public final class Coordinator {
                 "discovered": outcome.discovered,
             ])
             if let until = outcome.throttledUntil {
-                rateLimitedUntil = until
-                nextPollAt = until
+                throttle(until: until)
+                nextPollAt = rateLimitedUntil ?? now
             } else {
                 nextPollAt = now.addingTimeInterval(jitteredInterval())
             }
@@ -451,7 +460,17 @@ public final class Coordinator {
         let snap = await client.snapshot()
         rateCore = snap.core
         rateSearch = snap.search
-        if let until = snap.circuitOpenUntil { rateLimitedUntil = until }
+        if let until = snap.circuitOpenUntil { throttle(until: until) }
+    }
+
+    /// Set the rate-limit backoff deadline, capped so a bad or absurd value
+    /// (e.g. a misparsed `X-RateLimit-Reset`, or a circuit-breaker bug) can never
+    /// wedge the daemon idle indefinitely — a legitimate GitHub reset is always
+    /// within the hour. Paired with state-transition logging, a stall is now both
+    /// bounded and visible.
+    private func throttle(until: Date) {
+        let cap = nowFn().addingTimeInterval(3600)
+        rateLimitedUntil = min(until, cap)
     }
 
     private func setState(_ s: RuntimeState) {
