@@ -48,6 +48,7 @@ public final class Coordinator {
     /// Review-comment thread roots we've already notified about (in-memory).
     private var seenReplyThreadIDs: Set<Int> = []
     private var nextReplyCheckAt: Date = .distantPast
+    private var replyCheckInFlight = false
 
     public init(
         config: Config,
@@ -168,9 +169,17 @@ public final class Coordinator {
         }
 
         // Watch for human replies to our review threads (#326), on a slow cadence.
-        if identityOK, !runner.isRunning, now >= nextReplyCheckAt {
+        // Detached with a single-flight guard: a slow or hung reply fetch must
+        // never block the poll+review loop (it once wedged the daemon for ~50min,
+        // because this was awaited inline). Bounded client timeouts guarantee the
+        // detached task always completes and clears the flag.
+        if identityOK, !runner.isRunning, !replyCheckInFlight, now >= nextReplyCheckAt {
             nextReplyCheckAt = now.addingTimeInterval(300)
-            await checkThreadReplies()
+            replyCheckInFlight = true
+            Task { [weak self] in
+                await self?.checkThreadReplies()
+                self?.replyCheckInFlight = false
+            }
         }
 
         await processQueueStep()

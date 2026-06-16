@@ -93,7 +93,7 @@ public actor GitHubClient {
     private var circuitOpenUntil: Date?
 
     public init(
-        session: URLSession = .shared,
+        session: URLSession? = nil,
         tokenProvider: @escaping @Sendable () -> String?,
         coreFloor: Int = 500,
         searchFloor: Int = 5,
@@ -101,13 +101,25 @@ public actor GitHubClient {
         now: @escaping @Sendable () -> Date = { Date() },
         log: Logger = .shared
     ) {
-        self.session = session
+        self.session = session ?? GitHubClient.makeSession()
         self.tokenProvider = tokenProvider
         self.coreFloor = coreFloor
         self.searchFloor = searchFloor
         self.maxConsecutiveFailures = maxConsecutiveFailures
         self.now = now
         self.log = log
+    }
+
+    /// A URLSession with bounded timeouts so no request can hang the control
+    /// loop. `.shared` carries a 7-day `timeoutIntervalForResource`, which let a
+    /// stalled GitHub connection (e.g. a reply-thread GraphQL fetch) wedge the
+    /// daemon's poll loop indefinitely.
+    private static func makeSession() -> URLSession {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 30
+        cfg.timeoutIntervalForResource = 90
+        cfg.waitsForConnectivity = false
+        return URLSession(configuration: cfg)
     }
 
     public func updateFloors(core: Int, search: Int) {
