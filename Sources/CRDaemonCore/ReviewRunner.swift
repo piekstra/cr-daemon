@@ -108,6 +108,13 @@ public final class ReviewRunner: @unchecked Sendable {
     ) async -> RunResult {
         let p = profile ?? self.profile
         var args = ["review", url, "--profile", p, "--json", "--max-concurrency", "1"]
+        // Reuse a per-PR LLM session so each re-review carries context of this
+        // PR's prior reviews — the reviewer can resolve its own earlier points
+        // instead of waffling (raising A, then later calling A wrong). Skipped for
+        // --rerun, which bypasses resume gates, and for dry-runs.
+        if !dryRun, !rerun, let key = PRKey.parse(url: url) {
+            args.append(contentsOf: ["--session", "\(key.owner)-\(key.repo)-\(key.number)"])
+        }
         if dryRun { args.append("--dry-run") }
         if rerun { args.append("--rerun") }
         return await execute(args: args, key: PRKey.parse(url: url))
