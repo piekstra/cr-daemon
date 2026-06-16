@@ -81,6 +81,24 @@ cr-daemon reviews as a **separate account** (referred to here as `<reviewer>`). 
 cr-daemon **refuses to run reviews** if the configured `cr` profile resolves to anyone other than
 the configured reviewer login — a guard against accidentally reviewing as yourself.
 
+## Review agents (recommended)
+
+Review *quality* depends on cr's **trusted review agents** — specialized reviewer personas cr
+selects per PR. With none configured, cr does a single generic pass and reports
+`Reviewers: unavailable`. Point cr at an agent source; the
+[Open CLI Collective set](https://github.com/open-cli-collective/codereview-cli) (shipped in that
+repo's `.codereview/agents/`) is a good default:
+
+```bash
+# copy a trusted snapshot OUT of the git worktree, then register it
+cp -R ~/Dev/codereview-cli/.codereview/agents "$HOME/Library/Application Support/codereview/"
+cr config agent-source add "$HOME/Library/Application Support/codereview/agents" --profile reviewer
+cr agents list --profile reviewer   # verify (no worktree warning)
+```
+
+See **[docs/agents.md](docs/agents.md)** for the trust caveat (use a stable, non-PR-mutable path),
+verification, and notes on writing your own agents.
+
 ## Configuration
 
 `~/Library/Application Support/cr-daemon/config.json` (hot-reloadable via the menu). Defaults are
