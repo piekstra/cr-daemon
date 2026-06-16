@@ -1,0 +1,29 @@
+{
+  "total_count": 3,
+  "incomplete_results": false,
+  "items": [
+    {
+      "number": 42,
+      "title": "Add retry budget to client",
+      "html_url": "https://github.com/open-cli-collective/codereview-cli/pull/42",
+      "user": { "login": "piekstra" },
+      "updated_at": "2026-06-16T11:00:00Z",
+      "pull_request": { "url": "https://api.github.com/repos/open-cli-collective/codereview-cli/pulls/42" }
+    },
+    {
+      "number": 7,
+      "title": "Fix device discovery timeout",
+      "html_url": "https://github.com/piekstra/govee-cli/pull/7",
+      "user": { "login": "contributor-bob" },
+      "updated_at": "2026-06-16T10:30:00Z",
+      "pull_request": { "url": "https://api.github.com/repos/piekstra/govee-cli/pulls/7" }
+    },
+    {
+      "number": 9,
+      "title": "This is a plain issue, not a PR",
+      "html_url": "https://github.com/piekstra/govee-cli/issues/9",
+      "user": { "login": "someone" },
+      "updated_at": "2026-06-16T09:00:00Z"
+    }
+  ]
+}

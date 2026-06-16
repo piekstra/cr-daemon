@@ -1,0 +1,20 @@
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+# Packaging output
+build/
+*.app
+
+# Xcode (we don't use it, but contributors might open the package)
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Local runtime data that should never be committed
+*.log
+config.local.json

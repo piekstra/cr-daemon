@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent template for cr-daemon. Scripts/install.sh substitutes the
+  __EXEC_PATH__ and __LOG_DIR__ placeholders with absolute paths before
+  installing this into ~/Library/LaunchAgents/.
+
+  KeepAlive is intentionally NOT a bare `true`: with SuccessfulExit=false +
+  Crashed=true, launchd relaunches the app only when it crashes or exits
+  nonzero — a clean user-initiated "Quit" (exit 0) stays quit. ThrottleInterval
+  prevents a relaunch storm if the app crashes on startup.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.piekstra.cr-daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__EXEC_PATH__</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- Minimum seconds between (re)launches: guards against crash-loop storms. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- GUI/interactive agent (owns an NSStatusItem); avoid background throttling. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/launchd-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/launchd-stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- cr and gh live in Homebrew's bin; launchd starts with a bare PATH. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

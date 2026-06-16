@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/piekstra/cr-daemon/security/advisories/new
+    about: Please report security issues privately, not as a public issue.
+  - name: cr (codereview-cli)
+    url: https://github.com/open-cli-collective/codereview-cli
+    about: Questions about the underlying review CLI belong here.

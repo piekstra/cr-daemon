@@ -1,0 +1,38 @@
+name: Bug report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please **redact any tokens** from logs before pasting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Request a review from <reviewer> on PR …
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: From ~/Library/Logs/cr-daemon/cr-daemon.log (already token-redacted).
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: cr-daemon version, macOS version, and `cr version`.
+      placeholder: "cr-daemon 0.1.0 · macOS 14.5 · cr 0.3.128"
+    validations:
+      required: true
