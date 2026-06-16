@@ -11,6 +11,7 @@ public final class Coordinator {
     private let client: GitHubClient
     private let runner: ReviewRunner
     private let monitor: PowerNetworkMonitor
+    private let updater: Updater
     private let log: Logger
     private let nowFn: () -> Date
 
@@ -39,6 +40,14 @@ public final class Coordinator {
     public private(set) var identityOK = false
     public private(set) var safeMode = false
 
+    // cr-version + self-update state, cached for synchronous menu reads.
+    /// Parsed installed `cr` version (e.g. "0.4.161"), set at startup.
+    public private(set) var crVersionString: String?
+    /// A newer `cr` version if one is available upstream, else nil.
+    public private(set) var crUpdateAvailable: String?
+    /// True while a `brew upgrade` of `cr` is in flight (menu shows "Upgrading cr…").
+    public private(set) var upgrading = false
+
     private var loopTask: Task<Void, Never>?
     private var nextPollAt: Date = .distantPast
     private var rateLimitedUntil: Date?
@@ -49,6 +58,11 @@ public final class Coordinator {
     private var seenReplyThreadIDs: Set<Int> = []
     private var nextReplyCheckAt: Date = .distantPast
     private var replyCheckInFlight = false
+    /// Next due time for the ~6-hourly `cr` update check (network, detached).
+    private var nextUpdateCheckAt: Date = .distantPast
+    private var updateCheckInFlight = false
+    /// Next due time for the ~30-min failed-PR retry sweep (re-attempts hourly).
+    private var nextFailureRetryAt: Date = .distantPast
     /// #326 reply-check is disabled by default: it triggered a recurring control-
     /// loop stall that resisted root-causing even after bounding client timeouts
     /// and detaching the call. Re-enable once the wedge is understood.
@@ -64,6 +78,7 @@ public final class Coordinator {
         store: QueueStore,
         runner: ReviewRunner,
         monitor: PowerNetworkMonitor,
+        updater: Updater = Updater(),
         log: Logger = .shared,
         now: @escaping () -> Date = { Date() }
     ) {
@@ -72,6 +87,7 @@ public final class Coordinator {
         self.store = store
         self.runner = runner
         self.monitor = monitor
+        self.updater = updater
         self.log = log
         self.nowFn = now
     }
@@ -82,7 +98,22 @@ public final class Coordinator {
         Paths.ensureDirectories()
         self.safeMode = safeMode
         log.info("daemon.start", ["version": crDaemonVersion, "cr": runner.crBinaryPath, "safe_mode": safeMode])
-        log.info("cr.version", ["version": runner.crVersion()])
+        let rawCrVersion = runner.crVersion()
+        log.info("cr.version", ["version": rawCrVersion])
+        crVersionString = Updater.parseSemver(rawCrVersion)
+
+        // Detect a `cr` upgrade across runs: if the installed version changed since
+        // last startup, a fix may have landed (the #13 case), so un-stick every
+        // previously-failing PR for a fresh attempt. Persist the new version.
+        let lastSeen = try? String(contentsOf: Paths.lastCrVersionFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let current = crVersionString, let prev = lastSeen, !prev.isEmpty, prev != current {
+            let n = store.resetFailedForRetry()
+            log.info("cr.version_changed", ["from": prev, "to": current, "requeued": n])
+        }
+        if let current = crVersionString {
+            try? current.write(to: Paths.lastCrVersionFile, atomically: true, encoding: .utf8)
+        }
 
         // Hard identity guard: never let cr post as anyone but the reviewer login.
         identityResolved = runner.resolvedIdentity()
@@ -231,6 +262,30 @@ public final class Coordinator {
             Task { [weak self] in
                 await self?.checkThreadReplies()
                 self?.replyCheckInFlight = false
+            }
+        }
+
+        // Check upstream for a newer `cr` once at startup, then ~every 6h. Detached
+        // with a single-flight guard so a slow network call never blocks the loop
+        // (mirrors the reply-check). Sets crUpdateAvailable for the menu.
+        if !updateCheckInFlight, now >= nextUpdateCheckAt {
+            nextUpdateCheckAt = now.addingTimeInterval(6 * 3600)
+            updateCheckInFlight = true
+            Task { [weak self] in
+                await self?.checkForCRUpdate()
+                self?.updateCheckInFlight = false
+            }
+        }
+
+        // Re-attempt failed PRs on a slow cadence (sweep every ~30min; eligible
+        // when the failure is >1h old) so a transient/random failure eventually
+        // succeeds instead of staying permanently quarantined.
+        if now >= nextFailureRetryAt {
+            nextFailureRetryAt = now.addingTimeInterval(30 * 60)
+            let requeued = store.retryEligibleFailures(now: now, backoff: 3600)
+            if requeued > 0 {
+                log.info("failures.requeued", ["count": requeued])
+                onChange?()
             }
         }
 
@@ -443,6 +498,61 @@ public final class Coordinator {
             }
         }
         onChange?()
+    }
+
+    // MARK: - cr self-update
+
+    /// Ask GitHub for the latest `cr` release; if it's newer than the installed
+    /// version, surface it in the menu. Network call runs on this detached task,
+    /// never inline in the loop. No-op (clears the flag) on any error.
+    private func checkForCRUpdate() async {
+        guard let installed = crVersionString,
+            let latest = await updater.latestReleaseVersion()
+        else { return }
+        if Updater.isNewer(latest, than: installed) {
+            crUpdateAvailable = latest
+            log.info("cr.update_available", ["installed": installed, "latest": latest])
+        } else {
+            crUpdateAvailable = nil
+        }
+        onChange?()
+    }
+
+    /// One-click upgrade of `cr` via Homebrew. Runs detached (minutes-long); the
+    /// `upgrading` flag drives the menu. Upgrading mid-review is safe: the in-flight
+    /// `cr` process keeps its already-loaded binary, so only the *next* review uses
+    /// the new one — we deliberately do NOT block on or cancel the current review.
+    /// On success we re-read the version, clear the update flag, and un-stick failed
+    /// PRs (a fix may have landed) so newly-fixable PRs get re-reviewed.
+    public func upgradeCR() {
+        guard !upgrading else { return }
+        upgrading = true
+        log.info("cr.upgrade_start", [:])
+        onChange?()
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.updater.upgradeCR()
+            await MainActor.run {
+                self.upgrading = false
+                let raw = self.runner.crVersion()
+                self.crVersionString = Updater.parseSemver(raw)
+                self.crUpdateAvailable = nil
+                if let current = self.crVersionString {
+                    try? current.write(
+                        to: Paths.lastCrVersionFile, atomically: true, encoding: .utf8)
+                }
+                let n = self.store.resetFailedForRetry()
+                self.log.info(
+                    "cr.upgrade_done",
+                    ["ok": result.ok, "version": self.crVersionString ?? "?", "requeued": n])
+                if result.ok {
+                    self.notify("cr upgraded", "Now \(self.crVersionString ?? "?") — re-queued \(n) PR(s)")
+                } else {
+                    self.notify("cr upgrade failed", String(result.output.suffix(120)))
+                }
+                self.onChange?()
+            }
+        }
     }
 
     // MARK: - Power / network

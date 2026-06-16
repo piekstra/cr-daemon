@@ -9,5 +9,6 @@ runModelsTests()
 runSearchParsingTests()
 runSupervisorTests()
 runReplyThreadTests()
+runUpdaterTests()
 
 suite.finish()

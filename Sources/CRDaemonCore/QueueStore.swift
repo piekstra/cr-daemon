@@ -195,6 +195,59 @@ public final class QueueStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - Failure retry (resilience)
+
+    /// Un-quarantine `.failed` assignments whose `finishedAt` is older than
+    /// `backoff`, resetting them to `.pending` for a fresh attempt. We no longer
+    /// give up permanently: a transient/random failure (or a `cr` bug fixed in a
+    /// newer release) eventually succeeds on a later pass. Keeps `lastError` for
+    /// forensics. Returns the count reset.
+    @discardableResult
+    public func retryEligibleFailures(now: Date, backoff: TimeInterval) -> Int {
+        queue.sync {
+            var reset = 0
+            for (id, a) in byKey where a.state == .failed {
+                guard let finished = a.finishedAt,
+                    now.timeIntervalSince(finished) >= backoff
+                else { continue }
+                var x = a
+                x.state = .pending
+                x.attempts = 0
+                x.startedAt = nil
+                x.finishedAt = nil
+                x.updatedAt = now
+                byKey[id] = x
+                appendEventLocked("assignment.retry_failure", ["pr": id])
+                reset += 1
+            }
+            if reset > 0 { persistLocked() }
+            return reset
+        }
+    }
+
+    /// Immediately reset ALL `.failed` assignments to `.pending` (attempts=0,
+    /// startedAt/finishedAt cleared). Used after a `cr` upgrade so a fix un-sticks
+    /// previously-failing PRs. Keeps `lastError`. Returns the count reset.
+    @discardableResult
+    public func resetFailedForRetry() -> Int {
+        queue.sync {
+            var reset = 0
+            for (id, a) in byKey where a.state == .failed {
+                var x = a
+                x.state = .pending
+                x.attempts = 0
+                x.startedAt = nil
+                x.finishedAt = nil
+                x.updatedAt = now()
+                byKey[id] = x
+                appendEventLocked("assignment.retry_failure", ["pr": id])
+                reset += 1
+            }
+            if reset > 0 { persistLocked() }
+            return reset
+        }
+    }
+
     // MARK: - Reconciliation helpers (crash recovery)
 
     /// reviewing rows whose `cr` process is gone — candidates for recovery.

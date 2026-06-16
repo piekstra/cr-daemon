@@ -22,6 +22,11 @@ public enum Paths {
     public static var eventsLog: URL { appSupportDir.appendingPathComponent("events.jsonl") }
     public static var lockFile: URL { appSupportDir.appendingPathComponent("daemon.lock") }
     public static var crashLog: URL { appSupportDir.appendingPathComponent("crash-counter.json") }
+    /// Last-seen installed `cr` version, persisted so a startup can detect that an
+    /// upgrade happened and un-stick previously-failing PRs.
+    public static var lastCrVersionFile: URL {
+        appSupportDir.appendingPathComponent("cr-version.txt")
+    }
     public static var logFile: URL { logsDir.appendingPathComponent("cr-daemon.log") }
 
     /// Create the state + log directories if missing. Safe to call repeatedly.

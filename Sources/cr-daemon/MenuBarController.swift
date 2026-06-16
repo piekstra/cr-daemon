@@ -110,7 +110,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(actionItem("Open logs", #selector(openLogs)))
         menu.addItem(actionItem("Open data folder", #selector(openData)))
         menu.addItem(.separator())
+        if c.upgrading {
+            menu.addItem(disabled("Upgrading cr…"))
+        } else {
+            menu.addItem(actionItem("Upgrade cr…", #selector(upgradeCR)))
+        }
+        menu.addItem(.separator())
         menu.addItem(disabled("cr-daemon \(crDaemonVersion)"))
+        menu.addItem(disabled("cr \(c.crVersionString ?? "?")"))
+        if let update = c.crUpdateAvailable {
+            menu.addItem(disabled("  ↑ cr \(update) available"))
+        }
         let quit = actionItem("Quit", #selector(quit))
         quit.keyEquivalent = "q"
         menu.addItem(quit)
@@ -241,6 +251,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func editConfig() { NSWorkspace.shared.open(Paths.configFile) }
 
     @objc private func reloadConfig() { coordinator.reloadConfig() }
+
+    @objc private func upgradeCR() { coordinator.upgradeCR() }
 
     @objc private func openLogs() { NSWorkspace.shared.open(Paths.logsDir) }
 

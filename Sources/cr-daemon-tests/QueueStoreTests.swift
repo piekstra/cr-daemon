@@ -85,6 +85,59 @@ func runQueueStoreTests() {
         suite.expect(store.get(a.key)?.state == .pending, "re-queued after settle window")
     }
 
+    suite.test("retryEligibleFailuresRespectsBackoff") {
+        let (s, e) = tempURLs()
+        var clock = Date(timeIntervalSince1970: 1_000_000)
+        let store = QueueStore(stateURL: s, eventsURL: e, now: { clock })
+        let old = store.upsertDiscovered(pr("piekstra", "old", 1), org: "piekstra")
+        let fresh = store.upsertDiscovered(pr("piekstra", "fresh", 2), org: "piekstra")
+        // old failed 2h ago; fresh failed just now.
+        store.update(old.key) {
+            $0.state = .failed
+            $0.attempts = 3
+            $0.finishedAt = clock.addingTimeInterval(-7200)
+            $0.lastError = "boom"
+        }
+        store.update(fresh.key) {
+            $0.state = .failed
+            $0.attempts = 3
+            $0.finishedAt = clock
+            $0.lastError = "boom"
+        }
+
+        let n = store.retryEligibleFailures(now: clock, backoff: 3600)
+        suite.expect(n == 1, "only the >1h-old failure resets")
+        suite.expect(store.get(old.key)?.state == .pending, "old failure re-queued")
+        suite.expect(store.get(old.key)?.attempts == 0, "attempts reset")
+        suite.expect(store.get(old.key)?.finishedAt == nil, "finishedAt cleared")
+        suite.expect(store.get(old.key)?.lastError == "boom", "lastError preserved")
+        suite.expect(store.get(fresh.key)?.state == .failed, "recent failure left in backoff")
+    }
+
+    suite.test("resetFailedForRetryResetsAll") {
+        let (s, e) = tempURLs()
+        let store = QueueStore(stateURL: s, eventsURL: e)
+        let a = store.upsertDiscovered(pr("piekstra", "a", 1), org: "piekstra")
+        let b = store.upsertDiscovered(pr("piekstra", "b", 2), org: "piekstra")
+        let c = store.upsertDiscovered(pr("piekstra", "c", 3), org: "piekstra")
+        for k in [a.key, b.key] {
+            store.update(k) {
+                $0.state = .failed
+                $0.attempts = 3
+                $0.finishedAt = Date()
+                $0.lastError = "boom"
+            }
+        }
+        store.update(c.key) { $0.state = .done }
+
+        let n = store.resetFailedForRetry()
+        suite.expect(n == 2, "every failed PR reset regardless of age")
+        suite.expect(store.get(a.key)?.state == .pending)
+        suite.expect(store.get(a.key)?.attempts == 0)
+        suite.expect(store.get(b.key)?.state == .pending)
+        suite.expect(store.get(c.key)?.state == .done, "non-failed PRs untouched")
+    }
+
     suite.test("persistenceRoundTrip") {
         let (s, e) = tempURLs()
         do {

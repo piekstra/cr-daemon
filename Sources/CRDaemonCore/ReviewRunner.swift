@@ -86,15 +86,27 @@ public final class ReviewRunner: @unchecked Sendable {
     /// can't be resolved. The Coordinator refuses to run reviews unless this
     /// equals the configured reviewer login (so cr never self-reviews as you).
     public func resolvedIdentity(profile: String? = nil) -> String? {
-        let r = Subprocess.run(
-            crPath, ["me", "--profile", profile ?? self.profile, "--json"], timeout: 30,
-            environment: childEnv)
-        guard r.succeeded,
-            let obj = try? JSONSerialization.jsonObject(with: Data(r.stdout.utf8)) as? [String: Any],
-            let profiles = obj["profiles"] as? [[String: Any]],
-            let first = profiles.first
-        else { return nil }
-        return first["login"] as? String
+        // Retry a few times. `cr me` resolves identity via a GitHub call, so a
+        // transient blip (timeout, 5xx, model/provider hiccup) would otherwise
+        // wrongly fail the startup identity guard or tier validation and disable
+        // the daemon — or a labeled tier — for the entire session. A genuine
+        // misconfiguration still fails after the retries.
+        for attempt in 0..<3 {
+            let r = Subprocess.run(
+                crPath, ["me", "--profile", profile ?? self.profile, "--json"], timeout: 30,
+                environment: childEnv)
+            if r.succeeded,
+                let obj = try? JSONSerialization.jsonObject(with: Data(r.stdout.utf8))
+                    as? [String: Any],
+                let profiles = obj["profiles"] as? [[String: Any]],
+                let first = profiles.first,
+                let login = first["login"] as? String
+            {
+                return login
+            }
+            if attempt < 2 { Thread.sleep(forTimeInterval: 2) }
+        }
+        return nil
     }
 
     /// `cr` version string (for drift detection / logging).
