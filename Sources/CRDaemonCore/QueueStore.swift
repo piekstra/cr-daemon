@@ -23,6 +23,11 @@ public final class QueueStore: @unchecked Sendable {
 
     private var byKey: [String: Assignment] = [:]
     private var recentReviewStarts: [Date] = []
+    /// A PR can linger in the review-requested set for a poll cycle after we
+    /// review it (GitHub clears the request asynchronously). Don't re-queue a PR
+    /// we finished reviewing within this window, so the lag doesn't cause a
+    /// redundant re-review. A genuine re-request typically comes minutes later.
+    private let settleWindow: TimeInterval = 120
 
     public init(
         stateURL: URL = Paths.stateFile,
@@ -129,7 +134,11 @@ public final class QueueStore: @unchecked Sendable {
                 existing.org = org
                 existing.labels = pr.labels
                 existing.updatedAt = now()
-                if existing.state == .done || existing.state == .skipped {
+                let recentlyReviewed =
+                    existing.state == .done
+                    && (existing.finishedAt.map { now().timeIntervalSince($0) < settleWindow }
+                        ?? false)
+                if (existing.state == .done || existing.state == .skipped) && !recentlyReviewed {
                     existing.state = .pending
                     existing.lastError = nil
                     existing.attempts = 0  // a re-request is fresh work

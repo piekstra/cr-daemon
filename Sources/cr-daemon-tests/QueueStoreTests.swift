@@ -67,6 +67,24 @@ func runQueueStoreTests() {
         suite.expect(store.reviewStartsInLast24h() == 0)
     }
 
+    suite.test("settleWindowSuppressesImmediateRequeue") {
+        let (s, e) = tempURLs()
+        var clock = Date(timeIntervalSince1970: 1000)
+        let store = QueueStore(stateURL: s, eventsURL: e, now: { clock })
+        let a = store.upsertDiscovered(pr("piekstra", "a", 1), org: "piekstra")
+        store.update(a.key) {
+            $0.state = .done
+            $0.finishedAt = clock
+        }
+        clock = clock.addingTimeInterval(30)  // within the 120s settle window
+        _ = store.upsertDiscovered(pr("piekstra", "a", 1), org: "piekstra")
+        suite.expect(store.get(a.key)?.state == .done, "re-review suppressed during request-clear lag")
+
+        clock = clock.addingTimeInterval(200)  // past the window → genuine re-request
+        _ = store.upsertDiscovered(pr("piekstra", "a", 1), org: "piekstra")
+        suite.expect(store.get(a.key)?.state == .pending, "re-queued after settle window")
+    }
+
     suite.test("persistenceRoundTrip") {
         let (s, e) = tempURLs()
         do {
