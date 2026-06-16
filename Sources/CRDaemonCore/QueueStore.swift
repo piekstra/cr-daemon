@@ -131,6 +131,8 @@ public final class QueueStore: @unchecked Sendable {
                 if existing.state == .done || existing.state == .skipped {
                     existing.state = .pending
                     existing.lastError = nil
+                    existing.attempts = 0  // a re-request is fresh work
+                    existing.startedAt = nil  // clear the retry cooldown
                     appendEventLocked("assignment.requeued", ["pr": id])
                 }
                 byKey[id] = existing

@@ -196,7 +196,13 @@ public final class Coordinator {
             }
         }
 
-        let result = await runner.runReview(url: assignment.url, dryRun: confirm)
+        // cr exits early if the reviewer has already approved (even on a stale
+        // approval). So if a prior approval exists, force a fresh pass — otherwise
+        // a re-requested review would be a no-op instead of a real re-review.
+        let priorReview = try? await client.latestReviewState(key, by: config.reviewerLogin)
+        let needsRerun = priorReview?.uppercased() == "APPROVED"
+
+        let result = await runner.runReview(url: assignment.url, dryRun: confirm, rerun: needsRerun)
 
         if result.timedOut {
             finishFailure(key, exit: result.exitCode, error: "timed out", terminal: true)
@@ -233,6 +239,7 @@ public final class Coordinator {
             $0.finishedAt = nowFn()
             $0.lastOutcome = outcome
             $0.lastExitCode = result.exitCode
+            $0.attempts = 0  // successful pass; only consecutive failures count toward the cap
             $0.awaitingConfirm = nil
             $0.crPid = nil
             $0.lastSummary = "cr exited 0; review=\(reviewState ?? "none")"
