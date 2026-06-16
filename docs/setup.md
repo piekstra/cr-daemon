@@ -12,20 +12,34 @@ from the PR author, so its approval counts toward branch protection.
 A classic token (not fine-grained) is recommended: `repo` lets the account read PRs and submit
 approving reviews across every owner you grant it, with a single token.
 
-## 2. Grant repo access
+## 2. Grant repo access — **write, not read**
 
-`<reviewer>` can only be *requested as a reviewer* on repos it can read. Grant access where you'll use
-it — incrementally is fine:
+> **Critical:** `<reviewer>` needs **write (push)** access for its approval to *count* toward
+> branch protection. Read (or triage) only makes it *requestable* as a reviewer — GitHub silently
+> **ignores an approving review from a user without write access**, so the PR stays
+> `REVIEW_REQUIRED` even though the review shows as `APPROVED`. This is the most common setup
+> mistake. Grant push.
 
-- **Org repos** (e.g. an org you own): invite `<reviewer>` as a member, or add it to a team with at
-  least read/triage.
-- **Personal repos** (yours or another account you control): add `<reviewer>` as a collaborator. With
-  the `gh` CLI:
+Grant access where you'll use it — incrementally is fine:
+
+- **Org repos** (e.g. an org you own): add `<reviewer>` to a **team with push** (the cleanest way to
+  cover a whole org — add every repo to that team), or grant it push per-repo. Org membership with a
+  read base permission is **not** enough.
+  ```bash
+  # add the reviewer to a push-access team, then add a repo to that team:
+  gh api -X PUT orgs/<org>/teams/<team>/memberships/<reviewer>
+  gh api -X PUT orgs/<org>/teams/<team>/repos/<org>/<repo> -f permission=push
+  ```
+- **Personal repos** (yours or another account you control): add `<reviewer>` as a collaborator with
+  push. With the `gh` CLI:
   ```bash
   gh api -X PUT repos/<owner>/<repo>/collaborators/<reviewer> -f permission=push
   # accept as the reviewer account:
   GH_TOKEN=<reviewer-token> gh api -X PATCH user/repository_invitations/<id>
   ```
+
+Verify it took: `gh api repos/<owner>/<repo>/collaborators/<reviewer>/permission --jq .permission`
+should print `write` (or `admin`), not `read`.
 
 > You can only add collaborators to repos where you have **admin**. For an account you don't admin,
 > the owner has to add `<reviewer>` (or grant you admin).
