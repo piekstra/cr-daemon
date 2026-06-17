@@ -70,9 +70,12 @@ cr-daemon reviews as a **separate account** (referred to here as `<reviewer>`). 
 1. **Create the account** and a **classic Personal Access Token** on it with scopes
    `repo` and `read:org`. (A classic token is used so the same setup works if you later enable
    notification-based triggers; `repo` is what lets it read PRs and submit approvals.)
-2. **Give it access** to the repos you want it to review: add `<reviewer>` as a collaborator
-   (or org member) with at least read/triage. It only needs access where you actually request its
-   review — grant incrementally.
+2. **Give it _write_ (push) access** to the repos you want it to review: add `<reviewer>` as a
+   collaborator (or org member) with **push** — read/triage is *not* enough. GitHub silently
+   ignores an approving review from a user without write access, so the PR stays `REVIEW_REQUIRED`
+   and branch protection is never satisfied even though the review shows as approved. It only needs
+   access where you actually request its review — grant incrementally. See
+   [docs/setup.md](docs/setup.md) for the full rationale.
 3. **Stage the token**: `./Scripts/setup-reviewer.sh` creates a dedicated `cr` profile and a
    Keychain item from the token (read via stdin — never on the command line). It verifies the
    profile resolves to `<reviewer>`.
@@ -114,7 +117,7 @@ conservative.
 | `search_poll_interval_seconds` | `90` | Base poll interval (jittered) |
 | `core_rate_floor` / `search_rate_floor` | `500` / `5` | Stop spending a bucket below this many remaining |
 | `review_timeout_seconds` | `1200` | Wall-clock kill for a single `cr` run |
-| `per_pr_attempt_cap` | `3` | Attempts before a PR is quarantined as failed |
+| `per_pr_attempt_cap` | `3` | Attempts before a PR is marked failed — failures are auto-retried (after ~1h, and whenever `cr` upgrades), not permanently quarantined |
 | `daily_review_cap` | `50` | Global runaway guard |
 | `author_allowlist` | `null` | If set, only act on PRs by these authors |
 | `tier_label_profiles` | `{cr:large→reviewer-large}` | PR label → cr profile, to route a tagged PR to a deeper model tier ([docs/agents.md](docs/agents.md#deeper-reviews-on-demand-the-crlarge-label)) |

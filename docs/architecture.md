@@ -51,6 +51,26 @@ to the configured reviewer login. This prevents the daemon from ever reviewing a
   (idempotent — `cr` exits early if the PR is already approved).
 - Rate-limit resets are absolute epochs, so a sleep across a reset boundary doesn't strand the daemon.
 
+## Resilience & self-update
+
+Beyond launchd supervision, the daemon self-heals from softer failures:
+
+- **Watchdog** — a detached task (independent of the main actor, so a busy loop can't disable it)
+  wakes every 60s. If the control loop hasn't polled in over 300s while it *should* be polling
+  (online, not paused, not rate-limited, no review running), it `exit(1)`s so launchd relaunches
+  into a clean, reconciled state. A loop wedge is therefore never a permanent outage.
+- **Failure-retry sweep** — a PR that fails `per_pr_attempt_cap` times is marked `failed`, not
+  abandoned. Every ~30min the Coordinator re-queues failed PRs whose last failure is >1h old, so a
+  transient/random failure (an overloaded model, a one-off 5xx) eventually succeeds.
+- **cr-upgrade recovery** — at startup the daemon compares the installed `cr` version against the
+  last one it saw (`cr-version.txt`). If it changed, an upstream fix may have landed, so it resets
+  **all** failed PRs to `pending` for a fresh attempt.
+- **Update check & one-click upgrade** — every ~6h (and once at startup) it checks the
+  `codereview-cli` GitHub releases for a newer `cr`. A newer version surfaces as "↑ cr X.Y.Z
+  available" in the menu; **Upgrade cr…** runs `brew update && brew upgrade --cask codereview-cli`
+  (detached, safe mid-review) and then re-queues failed PRs. Both checks run detached behind a
+  single-flight guard so a slow network call never blocks the loop.
+
 ## Modules
 
 | File | Responsibility |
@@ -61,4 +81,5 @@ to the configured reviewer login. This prevents the daemon from ever reviewing a
 | `QueueStore` | Persistence + reconciliation |
 | `ReviewRunner` | Serialized `cr` execution + external cancel + identity probe |
 | `Coordinator` | The engine + all safety guards |
+| `Updater` | cr version check (GitHub releases) + one-click `brew` upgrade |
 | `PowerNetworkMonitor` / `Supervisor` | Sleep/wake/network; flock + crash loop |

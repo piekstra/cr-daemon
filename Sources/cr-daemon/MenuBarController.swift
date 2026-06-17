@@ -90,8 +90,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if !recent.isEmpty {
             menu.addItem(disabled("Recent"))
             for a in recent {
+                // For failures, show the cause inline (e.g. "github 502") rather
+                // than the PR title — that's the detail you actually want here.
+                let suffix: String
+                if a.lastOutcome == .failed, let err = a.lastError, !err.isEmpty {
+                    let r = Coordinator.classifyFailure(exit: a.lastExitCode ?? 0, error: err)
+                    suffix = " — \(r.kind.rawValue): \(String(r.summary.prefix(40)))"
+                } else {
+                    suffix = titleSuffix(a)
+                }
                 let item = actionItem(
-                    "   \(outcomeGlyph(a)) \(a.key)" + titleSuffix(a),
+                    "   \(outcomeGlyph(a)) \(a.key)" + suffix,
                     #selector(openItem(_:)))
                 item.representedObject = a.url
                 menu.addItem(item)

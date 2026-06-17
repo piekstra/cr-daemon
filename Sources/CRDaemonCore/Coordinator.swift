@@ -413,26 +413,75 @@ public final class Coordinator {
         setState(.active)
     }
 
-    private func finishFailure(_ key: PRKey, exit: Int32, error: String, terminal: Bool) {
+    private func finishFailure(_ key: PRKey, exit: Int32, error: String, terminal proposedTerminal: Bool) {
+        let reason = Coordinator.classifyFailure(exit: exit, error: error)
+        // A transient upstream blip (GitHub 5xx, model overload — cr exit 5) must
+        // not be quarantined for an outage it didn't cause: never terminal, and pin
+        // the attempt count below the cap so the retry cooldown keeps pacing
+        // attempts (~5min) until the dependency recovers. Real failures keep their
+        // incremented count and can still hit the terminal cap.
+        let transient = reason.kind == .upstream
+        let terminal = proposedTerminal && !transient
         store.update(key) {
             $0.state = terminal ? .failed : .pending
             $0.lastExitCode = exit
             $0.lastError = error
             $0.crPid = nil
+            if transient { $0.attempts = min($0.attempts, 1) }
             if terminal {
                 $0.finishedAt = nowFn()
                 $0.lastOutcome = .failed
             }
         }
-        store.appendEvent("review.fail", [
+        // Log WHY, not just the exit code. cr's exit 5 (`exitUpstream`) covers a
+        // GitHub 5xx *and* a model-provider failure — without the reason text a
+        // 502 burst is indistinguishable from a quota wall, and a confident wrong
+        // guess fills the gap. `kind` makes failures triage-able at a glance.
+        let fields: [String: Any] = [
             "pr": key.description, "exit": Int(exit), "terminal": terminal,
-        ])
-        log.warn("review.fail", ["pr": key.description, "exit": Int(exit), "terminal": terminal])
+            "kind": reason.kind.rawValue, "reason": reason.summary,
+        ]
+        store.appendEvent("review.fail", fields)
+        log.warn("review.fail", fields)
         if terminal, config.notifyOn.errors {
-            notify("Review failed", "\(key) — \(String(error.prefix(120)))")
+            notify("Review failed", "\(key) — \(reason.summary)")
         }
         onChange?()
         if identityOK { setState(.active) }
+    }
+
+    /// How a `cr` failure should be read. Derived from the exit code plus the
+    /// error tail so the log/menu/notification name a cause instead of a bare
+    /// number. `upstream` = a transient dependency blip (GitHub 5xx, model
+    /// overload/rate-limit) that the failure-retry sweep will recover on its own.
+    public enum FailureKind: String { case upstream, timeout, auth, other }
+    public struct FailureReason { public let kind: FailureKind; public let summary: String }
+
+    public nonisolated static func classifyFailure(exit: Int32, error: String) -> FailureReason {
+        // Compact one-line summary: the last non-empty line of cr's output tail
+        // (the GetPR/upstream message), already redaction-scrubbed upstream.
+        let summary = String(
+            (error.split(whereSeparator: \.isNewline).last.map(String.init) ?? error)
+                .trimmingCharacters(in: .whitespaces).prefix(160))
+        let e = error.lowercased()
+        let kind: FailureKind
+        if e.contains("timed out") || e.contains("timeout") {
+            kind = .timeout
+        } else if e.contains("status 401") || e.contains("status 403")
+            || e.contains("unauthorized") || e.contains("forbidden")
+            || e.contains("credential") || e.contains("identity")
+        {
+            kind = .auth
+        } else if exit == 5 || e.contains("upstream") || e.contains("overloaded")
+            || e.contains("rate limit") || e.contains("status 500")
+            || e.contains("status 502") || e.contains("status 503")
+            || e.contains("status 504") || e.contains("status 529")
+        {
+            kind = .upstream
+        } else {
+            kind = .other
+        }
+        return FailureReason(kind: kind, summary: summary)
     }
 
     // MARK: - Crash recovery

@@ -10,5 +10,6 @@ runSearchParsingTests()
 runSupervisorTests()
 runReplyThreadTests()
 runUpdaterTests()
+runFailureClassifyTests()
 
 suite.finish()
