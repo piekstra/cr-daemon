@@ -39,6 +39,7 @@ public struct Config: Codable, Equatable, Sendable {
     public var searchRateFloor: Int      // pause search calls when remaining < this
     public var maxConcurrentReviews: Int // v1 forces 1
     public var reviewTimeoutSeconds: Int // wall-clock kill for a single `cr` run
+    public var reviewMaxConcurrency: Int // cr --max-concurrency (parallel specialist reviewers)
     public var perPrAttemptCap: Int      // attempts before quarantining a PR as failed
     public var dailyReviewCap: Int       // global runaway guard
 
@@ -60,7 +61,8 @@ public struct Config: Codable, Equatable, Sendable {
         coreRateFloor: Int = 500,
         searchRateFloor: Int = 5,
         maxConcurrentReviews: Int = 1,
-        reviewTimeoutSeconds: Int = 3600,
+        reviewTimeoutSeconds: Int = 900,
+        reviewMaxConcurrency: Int = 4,
         perPrAttemptCap: Int = 3,
         dailyReviewCap: Int = 50,
         notifyOn: NotifyOptions = NotifyOptions(),
@@ -78,6 +80,7 @@ public struct Config: Codable, Equatable, Sendable {
         self.searchRateFloor = searchRateFloor
         self.maxConcurrentReviews = maxConcurrentReviews
         self.reviewTimeoutSeconds = reviewTimeoutSeconds
+        self.reviewMaxConcurrency = reviewMaxConcurrency
         self.perPrAttemptCap = perPrAttemptCap
         self.dailyReviewCap = dailyReviewCap
         self.notifyOn = notifyOn
@@ -108,6 +111,8 @@ public struct Config: Codable, Equatable, Sendable {
             try c.decodeIfPresent(Int.self, forKey: .maxConcurrentReviews) ?? d.maxConcurrentReviews
         reviewTimeoutSeconds =
             try c.decodeIfPresent(Int.self, forKey: .reviewTimeoutSeconds) ?? d.reviewTimeoutSeconds
+        reviewMaxConcurrency =
+            try c.decodeIfPresent(Int.self, forKey: .reviewMaxConcurrency) ?? d.reviewMaxConcurrency
         perPrAttemptCap =
             try c.decodeIfPresent(Int.self, forKey: .perPrAttemptCap) ?? d.perPrAttemptCap
         dailyReviewCap =
@@ -153,6 +158,7 @@ public struct Config: Codable, Equatable, Sendable {
         c.searchPollIntervalSeconds = max(30, c.searchPollIntervalSeconds)
         c.maxConcurrentReviews = 1  // v1 serializes reviews regardless of config
         c.reviewTimeoutSeconds = max(120, c.reviewTimeoutSeconds)
+        c.reviewMaxConcurrency = min(8, max(1, c.reviewMaxConcurrency))
         c.perPrAttemptCap = max(1, c.perPrAttemptCap)
         c.dailyReviewCap = max(1, c.dailyReviewCap)
         c.coreRateFloor = max(0, c.coreRateFloor)

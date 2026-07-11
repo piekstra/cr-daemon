@@ -17,6 +17,7 @@ public final class ReviewRunner: @unchecked Sendable {
     private let crPath: String
     private let profile: String
     private let timeout: TimeInterval
+    private let maxConcurrency: Int
     private let log: Logger
     private let childEnv: [String: String]
     private let checkouts: CheckoutManager
@@ -29,11 +30,13 @@ public final class ReviewRunner: @unchecked Sendable {
         crPath: String = ReviewRunner.resolveCRPath(),
         profile: String,
         timeout: TimeInterval,
+        maxConcurrency: Int = 4,
         log: Logger = .shared
     ) {
         self.crPath = crPath
         self.profile = profile
         self.timeout = timeout
+        self.maxConcurrency = maxConcurrency
         self.log = log
         self.childEnv = ReviewRunner.childEnvironment()
         self.checkouts = CheckoutManager(log: log, environment: self.childEnv)
@@ -121,7 +124,7 @@ public final class ReviewRunner: @unchecked Sendable {
         url: String, profile: String? = nil, dryRun: Bool = false, rerun: Bool = false
     ) async -> RunResult {
         let p = profile ?? self.profile
-        var args = ["review", url, "--profile", p, "--json", "--max-concurrency", "1"]
+        var args = ["review", url, "--profile", p, "--json", "--max-concurrency", String(maxConcurrency)]
         // Reuse a per-PR LLM session so each re-review carries context of this
         // PR's prior reviews — the reviewer can resolve its own earlier points
         // instead of waffling (raising A, then later calling A wrong). Skipped for

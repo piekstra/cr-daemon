@@ -36,7 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let store = QueueStore()
         let runner = ReviewRunner(
             profile: config.crProfile,
-            timeout: TimeInterval(config.reviewTimeoutSeconds))
+            timeout: TimeInterval(config.reviewTimeoutSeconds),
+            maxConcurrency: config.reviewMaxConcurrency)
         let monitor = PowerNetworkMonitor()
 
         coordinator = Coordinator(
