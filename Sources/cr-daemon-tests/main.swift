@@ -11,5 +11,6 @@ runSupervisorTests()
 runReplyThreadTests()
 runUpdaterTests()
 runFailureClassifyTests()
+runTimeoutNoticeTests()
 
 suite.finish()

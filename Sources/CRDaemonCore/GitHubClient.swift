@@ -196,6 +196,68 @@ public actor GitHubClient {
         return obj?["login"] as? String
     }
 
+    /// Post an issue comment on a PR. Core bucket. Deliberately bypasses the
+    /// GET request path: mutations must never be coalesced with an identical
+    /// in-flight call or served from a conditional cache.
+    public func postIssueComment(_ key: PRKey, body: String) async throws {
+        let current = now()
+        if let until = circuitOpenUntil, current < until {
+            throw GitHubError.circuitOpen(until: until)
+        }
+        if let core, core.shouldThrottle(floor: coreFloor, now: current) {
+            throw GitHubError.throttled(resource: .core, until: core.reset)
+        }
+        guard let token = tokenProvider() else { throw GitHubError.noToken }
+        guard
+            let url = URL(
+                string:
+                    "https://api.github.com/repos/\(key.owner)/\(key.repo)/issues/\(key.number)/comments"
+            )
+        else { throw GitHubError.transport("bad url for comment on \(key)") }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        req.setValue("cr-daemon/\(crDaemonVersion)", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["body": body])
+
+        let data: Data
+        let http: HTTPURLResponse
+        do {
+            let (d, resp) = try await session.data(for: req)
+            data = d
+            guard let h = resp as? HTTPURLResponse else {
+                throw GitHubError.transport("non-HTTP response")
+            }
+            http = h
+        } catch let e as GitHubError {
+            throw e
+        } catch {
+            registerFailure()
+            throw GitHubError.transport(String(describing: error))
+        }
+        if let (res, parsed) = RateLimitHeaders.parse(http.allHeaderFields, now: current) {
+            if res == .core { core = parsed } else { search = parsed }
+        }
+        switch http.statusCode {
+        case 200..<300:
+            registerSuccess()
+        case 403, 429:
+            let wait = RateLimitHeaders.retryAfterSeconds(http.allHeaderFields)
+                ?? Backoff.delay(attempt: consecutiveFailures, base: 60, cap: 600)
+            circuitOpenUntil = current.addingTimeInterval(wait)
+            registerFailure()
+            throw GitHubError.secondaryLimit(until: current.addingTimeInterval(wait))
+        default:
+            registerFailure()
+            let snippet = Redact.scrub(String(data: data.prefix(300), encoding: .utf8) ?? "")
+            throw GitHubError.http(status: http.statusCode, bodySnippet: snippet)
+        }
+    }
+
     // MARK: - Core request path
 
     private func request(

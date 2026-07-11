@@ -331,8 +331,14 @@ public final class Coordinator {
         let key = assignment.key
         let confirm = (config.autonomy == .confirm) && !forceLive
         // Route by label (e.g. cr:large → Opus profile); falls back to the default.
+        // Tier-routed runs also get the larger wall-clock budget — big diffs on
+        // the big model legitimately take longer than the default timeout.
+        let tierLabel = Config.matchedTierLabel(
+            labels: assignment.labels ?? [], tierMap: activeTierProfiles)
         let chosenProfile = Config.selectProfile(
             labels: assignment.labels ?? [], tierMap: activeTierProfiles, fallback: config.crProfile)
+        let runTimeout = TimeInterval(
+            tierLabel != nil ? config.reviewTimeoutLargeSeconds : config.reviewTimeoutSeconds)
         setState(.reviewing(key))
         let token = UUID().uuidString
         store.update(key) {
@@ -362,9 +368,12 @@ public final class Coordinator {
         let needsRerun = priorReview?.uppercased() == "APPROVED"
 
         let result = await runner.runReview(
-            url: assignment.url, profile: chosenProfile, dryRun: confirm, rerun: needsRerun)
+            url: assignment.url, profile: chosenProfile, dryRun: confirm, rerun: needsRerun,
+            timeoutOverride: runTimeout)
 
         if result.timedOut {
+            await postTimeoutGuidance(
+                key: key, usedLargeTier: tierLabel != nil, budgetSeconds: Int(runTimeout))
             finishFailure(key, exit: result.exitCode, error: "timed out", terminal: true)
             return
         }
@@ -411,6 +420,28 @@ public final class Coordinator {
         notifyOutcome(key, outcome)
         onChange?()
         setState(.active)
+    }
+
+    /// Leave next-step guidance on the PR after a timeout kill. Best-effort: a
+    /// failed post is logged, never fatal — the review failure path proceeds
+    /// regardless.
+    private func postTimeoutGuidance(key: PRKey, usedLargeTier: Bool, budgetSeconds: Int) async {
+        guard config.timeoutGuidanceComment else { return }
+        let body = TimeoutNotice.body(
+            minutes: max(1, budgetSeconds / 60),
+            usedLargeTier: usedLargeTier,
+            largeLabel: activeTierProfiles.keys.sorted().first)
+        do {
+            try await client.postIssueComment(key, body: body)
+            store.appendEvent(
+                "review.timeout_notice", ["pr": key.description, "posted": true])
+        } catch {
+            store.appendEvent(
+                "review.timeout_notice",
+                ["pr": key.description, "posted": false,
+                 "reason": Redact.scrub(String(describing: error))])
+            log.warn("review.timeout_notice_failed", ["pr": key.description])
+        }
     }
 
     private func finishFailure(_ key: PRKey, exit: Int32, error: String, terminal proposedTerminal: Bool) {

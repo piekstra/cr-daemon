@@ -121,7 +121,8 @@ public final class ReviewRunner: @unchecked Sendable {
     }
 
     public func runReview(
-        url: String, profile: String? = nil, dryRun: Bool = false, rerun: Bool = false
+        url: String, profile: String? = nil, dryRun: Bool = false, rerun: Bool = false,
+        timeoutOverride: TimeInterval? = nil
     ) async -> RunResult {
         let p = profile ?? self.profile
         var args = ["review", url, "--profile", p, "--json", "--max-concurrency", String(maxConcurrency)]
@@ -134,7 +135,8 @@ public final class ReviewRunner: @unchecked Sendable {
         }
         if dryRun { args.append("--dry-run") }
         if rerun { args.append("--rerun") }
-        return await execute(args: args, key: PRKey.parse(url: url))
+        return await execute(
+            args: args, key: PRKey.parse(url: url), timeoutOverride: timeoutOverride)
     }
 
     /// Recovery-only: re-post any missing/failed required posts for an existing
@@ -157,7 +159,9 @@ public final class ReviewRunner: @unchecked Sendable {
         }
     }
 
-    private func execute(args: [String], key: PRKey?) async -> RunResult {
+    private func execute(
+        args: [String], key: PRKey?, timeoutOverride: TimeInterval? = nil
+    ) async -> RunResult {
         await withCheckedContinuation { (cont: CheckedContinuation<RunResult, Never>) in
             DispatchQueue.global().async { [self] in
                 // Checkout-native cr must run from inside a clone of the repo
@@ -167,7 +171,7 @@ public final class ReviewRunner: @unchecked Sendable {
                     cwd = checkouts.ensureCheckout(owner: key.owner, repo: key.repo)
                 }
                 let r = Subprocess.run(
-                    crPath, args, timeout: timeout, environment: childEnv,
+                    crPath, args, timeout: timeoutOverride ?? timeout, environment: childEnv,
                     currentDirectory: cwd,
                     onLaunch: { proc in
                         self.lock.lock()

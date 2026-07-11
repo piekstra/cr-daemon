@@ -39,6 +39,14 @@ public struct Config: Codable, Equatable, Sendable {
     public var searchRateFloor: Int      // pause search calls when remaining < this
     public var maxConcurrentReviews: Int // v1 forces 1
     public var reviewTimeoutSeconds: Int // wall-clock kill for a single `cr` run
+    /// Wall-clock kill for tier-routed runs (a `tierLabelProfiles` label matched,
+    /// e.g. `cr:large`). Large-model passes legitimately run longer; never below
+    /// `reviewTimeoutSeconds`.
+    public var reviewTimeoutLargeSeconds: Int
+    /// Post a guidance comment on the PR when a review dies at its timeout, so
+    /// the author learns what happened and what to do next (label for the large
+    /// tier, split the PR, re-request).
+    public var timeoutGuidanceComment: Bool
     public var reviewMaxConcurrency: Int // cr --max-concurrency (parallel specialist reviewers)
     public var perPrAttemptCap: Int      // attempts before quarantining a PR as failed
     public var dailyReviewCap: Int       // global runaway guard
@@ -62,6 +70,8 @@ public struct Config: Codable, Equatable, Sendable {
         searchRateFloor: Int = 5,
         maxConcurrentReviews: Int = 1,
         reviewTimeoutSeconds: Int = 900,
+        reviewTimeoutLargeSeconds: Int = 2700,
+        timeoutGuidanceComment: Bool = true,
         reviewMaxConcurrency: Int = 4,
         perPrAttemptCap: Int = 3,
         dailyReviewCap: Int = 50,
@@ -80,6 +90,8 @@ public struct Config: Codable, Equatable, Sendable {
         self.searchRateFloor = searchRateFloor
         self.maxConcurrentReviews = maxConcurrentReviews
         self.reviewTimeoutSeconds = reviewTimeoutSeconds
+        self.reviewTimeoutLargeSeconds = reviewTimeoutLargeSeconds
+        self.timeoutGuidanceComment = timeoutGuidanceComment
         self.reviewMaxConcurrency = reviewMaxConcurrency
         self.perPrAttemptCap = perPrAttemptCap
         self.dailyReviewCap = dailyReviewCap
@@ -111,6 +123,12 @@ public struct Config: Codable, Equatable, Sendable {
             try c.decodeIfPresent(Int.self, forKey: .maxConcurrentReviews) ?? d.maxConcurrentReviews
         reviewTimeoutSeconds =
             try c.decodeIfPresent(Int.self, forKey: .reviewTimeoutSeconds) ?? d.reviewTimeoutSeconds
+        reviewTimeoutLargeSeconds =
+            try c.decodeIfPresent(Int.self, forKey: .reviewTimeoutLargeSeconds)
+            ?? d.reviewTimeoutLargeSeconds
+        timeoutGuidanceComment =
+            try c.decodeIfPresent(Bool.self, forKey: .timeoutGuidanceComment)
+            ?? d.timeoutGuidanceComment
         reviewMaxConcurrency =
             try c.decodeIfPresent(Int.self, forKey: .reviewMaxConcurrency) ?? d.reviewMaxConcurrency
         perPrAttemptCap =
@@ -125,16 +143,22 @@ public struct Config: Codable, Equatable, Sendable {
             ?? d.tierLabelProfiles
     }
 
+    /// The tier label a PR matched (e.g. "cr:large"), or nil when none did.
+    /// Deterministic when multiple labels match (sorted).
+    public static func matchedTierLabel(labels: [String], tierMap: [String: String]) -> String? {
+        let present = Set(labels.map { $0.lowercased() })
+        return tierMap.keys.sorted().first { present.contains($0.lowercased()) }
+    }
+
     /// Pick the cr profile for a PR given its labels. Falls back to `fallback`
-    /// when no label matches. Deterministic when multiple labels match (sorted).
+    /// when no label matches.
     public static func selectProfile(
         labels: [String], tierMap: [String: String], fallback: String
     ) -> String {
-        let present = Set(labels.map { $0.lowercased() })
-        for label in tierMap.keys.sorted() where present.contains(label.lowercased()) {
-            return tierMap[label] ?? fallback
+        guard let label = matchedTierLabel(labels: labels, tierMap: tierMap) else {
+            return fallback
         }
-        return fallback
+        return tierMap[label] ?? fallback
     }
 
     public static let `default` = Config()
@@ -158,6 +182,7 @@ public struct Config: Codable, Equatable, Sendable {
         c.searchPollIntervalSeconds = max(30, c.searchPollIntervalSeconds)
         c.maxConcurrentReviews = 1  // v1 serializes reviews regardless of config
         c.reviewTimeoutSeconds = max(120, c.reviewTimeoutSeconds)
+        c.reviewTimeoutLargeSeconds = max(c.reviewTimeoutSeconds, c.reviewTimeoutLargeSeconds)
         c.reviewMaxConcurrency = min(8, max(1, c.reviewMaxConcurrency))
         c.perPrAttemptCap = max(1, c.perPrAttemptCap)
         c.dailyReviewCap = max(1, c.dailyReviewCap)

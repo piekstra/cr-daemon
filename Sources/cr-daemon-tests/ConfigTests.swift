@@ -70,6 +70,36 @@ func runConfigTests() {
             c.tierLabelProfiles["cr:large"] == "reviewer-large", "new field defaulted, not reset")
     }
 
+    suite.test("largeTimeoutDefaultsAndClamp") {
+        let d = Config.default
+        suite.expect(d.reviewTimeoutLargeSeconds == 2700, "large default 45min")
+        suite.expect(d.timeoutGuidanceComment, "guidance comment on by default")
+        // Large budget can never be below the base budget.
+        let v = Config(reviewTimeoutSeconds: 1800, reviewTimeoutLargeSeconds: 600).validated()
+        suite.expect(v.reviewTimeoutLargeSeconds == 1800, "large clamped up to base")
+    }
+
+    suite.test("largeTimeoutLenientDecode") {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("old2-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let json = #"{"review_timeout_seconds":900}"#
+        try json.write(to: tmp, atomically: true, encoding: .utf8)
+        let c = Config.load(from: tmp)
+        suite.expect(c.reviewTimeoutLargeSeconds == 2700, "missing key gets default")
+        suite.expect(c.timeoutGuidanceComment, "missing key gets default")
+    }
+
+    suite.test("matchedTierLabel") {
+        let map = ["cr:large": "reviewer-large"]
+        suite.expect(Config.matchedTierLabel(labels: ["cr:large"], tierMap: map) == "cr:large")
+        suite.expect(
+            Config.matchedTierLabel(labels: ["CR:Large", "bug"], tierMap: map) == "cr:large",
+            "case-insensitive")
+        suite.expect(Config.matchedTierLabel(labels: ["bug"], tierMap: map) == nil)
+        suite.expect(Config.matchedTierLabel(labels: ["cr:large"], tierMap: [:]) == nil)
+    }
+
     suite.test("selectProfileByLabel") {
         let map = ["cr:large": "reviewer-large"]
         suite.expect(
