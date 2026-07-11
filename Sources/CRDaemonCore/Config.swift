@@ -37,7 +37,7 @@ public struct Config: Codable, Equatable, Sendable {
     public var searchPollIntervalSeconds: Int
     public var coreRateFloor: Int        // pause core calls when remaining < this
     public var searchRateFloor: Int      // pause search calls when remaining < this
-    public var maxConcurrentReviews: Int // v1 forces 1
+    public var maxConcurrentReviews: Int // parallel reviews across PRs (1-10, distinct repos)
     public var reviewTimeoutSeconds: Int // wall-clock kill for a single `cr` run
     /// Wall-clock kill for tier-routed runs (a `tierLabelProfiles` label matched,
     /// e.g. `cr:large`). Large-model passes legitimately run longer; never below
@@ -68,7 +68,7 @@ public struct Config: Codable, Equatable, Sendable {
         searchPollIntervalSeconds: Int = 90,
         coreRateFloor: Int = 500,
         searchRateFloor: Int = 5,
-        maxConcurrentReviews: Int = 1,
+        maxConcurrentReviews: Int = 3,
         reviewTimeoutSeconds: Int = 900,
         reviewTimeoutLargeSeconds: Int = 2700,
         timeoutGuidanceComment: Bool = true,
@@ -180,7 +180,10 @@ public struct Config: Codable, Equatable, Sendable {
     public func validated() -> Config {
         var c = self
         c.searchPollIntervalSeconds = max(30, c.searchPollIntervalSeconds)
-        c.maxConcurrentReviews = 1  // v1 serializes reviews regardless of config
+        // Reviews parallelize across PRs (same-repo runs are excluded by the
+        // scheduler). Capped at 10: each review itself fans out up to
+        // reviewMaxConcurrency specialist sessions.
+        c.maxConcurrentReviews = min(10, max(1, c.maxConcurrentReviews))
         c.reviewTimeoutSeconds = max(120, c.reviewTimeoutSeconds)
         c.reviewTimeoutLargeSeconds = max(c.reviewTimeoutSeconds, c.reviewTimeoutLargeSeconds)
         c.reviewMaxConcurrency = min(8, max(1, c.reviewMaxConcurrency))

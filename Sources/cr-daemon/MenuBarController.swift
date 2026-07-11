@@ -179,7 +179,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         switch c.runtimeState {
         case .starting: return "Starting…"
         case .active: return "Watching"
-        case .reviewing(let k): return "Reviewing \(k)"
+        case .reviewing(let keys):
+            return keys.count == 1
+                ? "Reviewing \(keys[0])"
+                : "Reviewing \(keys.count) PRs"
         case .paused: return "Paused"
         case .offline: return "Offline — waiting for network"
         case .rateLimited(let until): return "Rate-limited until \(Self.timeFmt.string(from: until))"

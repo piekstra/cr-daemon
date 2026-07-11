@@ -117,7 +117,7 @@ public struct Assignment: Codable, Equatable, Sendable {
 public enum RuntimeState: Equatable, Sendable {
     case starting
     case active                      // watching normally
-    case reviewing(PRKey)            // a review is in flight
+    case reviewing([PRKey])          // one or more reviews in flight (parallel)
     case paused                      // user paused
     case offline                     // no network
     case rateLimited(until: Date)    // backing off a GitHub bucket
@@ -131,7 +131,8 @@ public enum RuntimeState: Equatable, Sendable {
         switch self {
         case .starting: return "starting"
         case .active: return "active"
-        case .reviewing(let key): return "reviewing \(key.description)"
+        case .reviewing(let keys):
+            return "reviewing \(keys.map(\.description).joined(separator: ", "))"
         case .paused: return "paused"
         case .offline: return "offline"
         case .rateLimited(let until): return "rateLimited until \(Self.iso(until))"

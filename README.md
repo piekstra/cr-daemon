@@ -27,7 +27,7 @@ duplicate process and no lost work).
                                               ┌───────────────────────────────┐
                                               │ Queue (atomic JSON, crash-safe)│
                                               └───────────────┬───────────────┘
-                                                              │ one at a time
+                                                              │ up to N in parallel (distinct repos)
                                                               ▼
                                    cr review <url> --profile reviewer --json
                                               │
@@ -116,6 +116,7 @@ conservative.
 | `autonomy` | `auto` | `auto` = live review on assignment; `confirm` = dry-run then approve from the menu |
 | `search_poll_interval_seconds` | `90` | Base poll interval (jittered) |
 | `core_rate_floor` / `search_rate_floor` | `500` / `5` | Stop spending a bucket below this many remaining |
+| `max_concurrent_reviews` | `3` | Reviews run in parallel across PRs, up to this many (clamped 1–10). Two PRs of the same repo never run concurrently — they share a managed checkout |
 | `review_timeout_seconds` | `900` | Wall-clock kill for a single `cr` run |
 | `review_timeout_large_seconds` | `2700` | Wall-clock kill for tier-routed runs (e.g. `cr:large`); clamped to ≥ `review_timeout_seconds` |
 | `timeout_guidance_comment` | `true` | On a timeout kill, post a PR comment telling the author what happened and what to try (large-tier label, splitting the PR, re-requesting) |

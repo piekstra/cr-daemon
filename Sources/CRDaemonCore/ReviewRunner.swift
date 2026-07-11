@@ -23,8 +23,8 @@ public final class ReviewRunner: @unchecked Sendable {
     private let checkouts: CheckoutManager
 
     private let lock = NSLock()
-    private var currentProcess: Process?
-    private var currentKey: PRKey?
+    /// All in-flight `cr` processes (reviews now run in parallel across PRs).
+    private var running: [(process: Process, key: PRKey?)] = []
 
     public init(
         crPath: String = ReviewRunner.resolveCRPath(),
@@ -79,12 +79,12 @@ public final class ReviewRunner: @unchecked Sendable {
 
     public var isRunning: Bool {
         lock.lock(); defer { lock.unlock() }
-        return currentProcess != nil
+        return !running.isEmpty
     }
 
-    public var runningKey: PRKey? {
+    public var runningKeys: [PRKey] {
         lock.lock(); defer { lock.unlock() }
-        return currentKey
+        return running.compactMap { $0.key }
     }
 
     /// The login `cr` would post as for the configured profile, or nil if it
@@ -147,13 +147,13 @@ public final class ReviewRunner: @unchecked Sendable {
             key: PRKey.parse(url: url))
     }
 
-    /// SIGTERM the in-flight `cr` process. Used on sleep; the assignment is
+    /// SIGTERM every in-flight `cr` process. Used on sleep; the assignments are
     /// re-queued and recovered via `--retry-posts` on wake.
-    public func cancelCurrent() {
+    public func cancelAll() {
         lock.lock()
-        let p = currentProcess
+        let procs = running.map { $0.process }
         lock.unlock()
-        if let p {
+        for p in procs {
             log.warn("review.cancel", ["pid": Int(p.processIdentifier)])
             p.terminate()
         }
@@ -170,18 +170,20 @@ public final class ReviewRunner: @unchecked Sendable {
                 if let key {
                     cwd = checkouts.ensureCheckout(owner: key.owner, repo: key.repo)
                 }
+                var launched: Process?
                 let r = Subprocess.run(
                     crPath, args, timeout: timeoutOverride ?? timeout, environment: childEnv,
                     currentDirectory: cwd,
                     onLaunch: { proc in
                         self.lock.lock()
-                        self.currentProcess = proc
-                        self.currentKey = key
+                        launched = proc
+                        self.running.append((process: proc, key: key))
                         self.lock.unlock()
                     })
                 self.lock.lock()
-                self.currentProcess = nil
-                self.currentKey = nil
+                if let launched {
+                    self.running.removeAll { $0.process === launched }
+                }
                 self.lock.unlock()
                 cont.resume(
                     returning: RunResult(

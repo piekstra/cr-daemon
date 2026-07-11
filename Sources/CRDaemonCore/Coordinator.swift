@@ -49,6 +49,10 @@ public final class Coordinator {
     public private(set) var upgrading = false
 
     private var loopTask: Task<Void, Never>?
+    /// Reviews currently in flight, keyed by PR. Reviews run in parallel up to
+    /// `config.maxConcurrentReviews`, never two PRs of the same repo (they
+    /// share a managed checkout).
+    private var inFlight: [PRKey: Task<Void, Never>] = [:]
     private var nextPollAt: Date = .distantPast
     private var rateLimitedUntil: Date?
     private let retryCooldown: TimeInterval = 300
@@ -189,10 +193,12 @@ public final class Coordinator {
     }
 
     private func controlLoopWedged() -> Bool {
-        guard !runner.isRunning, !config.paused, monitor.isOnline, !safeMode else { return false }
+        guard !config.paused, monitor.isOnline, !safeMode else { return false }
         if let until = rateLimitedUntil, nowFn() < until { return false }
-        // Polls run every ~searchPollIntervalSeconds (default 90s). Five minutes of
-        // silence while idle means the loop is wedged, not merely between polls.
+        // Polls run every ~searchPollIntervalSeconds (default 90s). Reviews no
+        // longer block the loop (they run as tracked tasks), so polling must
+        // stay fresh even while reviewing — five minutes of silence means the
+        // loop is wedged, not merely between polls.
         return nowFn().timeIntervalSince(lastPollAt) > 300
     }
 
@@ -289,40 +295,96 @@ public final class Coordinator {
             }
         }
 
-        await processQueueStep()
+        processQueueStep()
 
         // Reaching here means we're on the active path (paused/offline/rate-limited
-        // returned early); reflect idle-but-watching unless a review just started.
-        if identityOK, !runner.isRunning { setState(.active) }
+        // returned early); reflect idle-but-watching or the in-flight set.
+        refreshWorkState()
     }
 
-    /// Pick at most one eligible pending PR and review it. Enforces: serialization,
-    /// daily cap, per-PR attempt cap + cooldown, confirm-mode parking, and an
-    /// execution-time allowlist re-check (a safety boundary, not just a filter).
-    private func processQueueStep() async {
-        guard identityOK, !safeMode, !runner.isRunning else { return }
-        if store.reviewStartsInLast24h() >= config.dailyReviewCap {
+    /// Fill free review slots from the pending queue. Enforces: the concurrency
+    /// cap, one-review-per-repo (shared checkout), daily cap, per-PR attempt
+    /// cap + cooldown, confirm-mode parking, and an execution-time allowlist
+    /// re-check (a safety boundary, not just a filter). Reviews are launched as
+    /// tracked tasks so the control loop keeps polling while they run.
+    private func processQueueStep() {
+        guard identityOK, !safeMode else { return }
+        let slots = config.maxConcurrentReviews - inFlight.count
+        guard slots > 0 else { return }
+        let started24h = store.reviewStartsInLast24h()
+        if started24h >= config.dailyReviewCap {
             log.warn("review.daily_cap", ["cap": config.dailyReviewCap])
             return
         }
-        let now = nowFn()
-        let candidate = store.pending().first { a in
-            if a.awaitingConfirm == true { return false }
-            if a.attempts >= config.perPrAttemptCap { return false }
-            if let started = a.startedAt, a.attempts > 0,
-                now < started.addingTimeInterval(retryCooldown) { return false }
-            return true
-        }
-        guard let next = candidate else { return }
-        guard config.isOrgAllowed(next.org) else {
-            store.update(next.key) {
-                $0.state = .skipped
-                $0.lastError = "org not allowlisted"
+        let picks = Coordinator.selectCandidates(
+            pending: store.pending(),
+            inFlight: Set(inFlight.keys),
+            slots: min(slots, config.dailyReviewCap - started24h),
+            now: nowFn(),
+            attemptCap: config.perPrAttemptCap,
+            cooldown: retryCooldown)
+        for next in picks {
+            guard config.isOrgAllowed(next.org) else {
+                store.update(next.key) {
+                    $0.state = .skipped
+                    $0.lastError = "org not allowlisted"
+                }
+                log.warn("review.blocked_org", ["pr": next.key.description, "org": next.org])
+                continue
             }
-            log.warn("review.blocked_org", ["pr": next.key.description, "org": next.org])
-            return
+            launchReview(next)
         }
-        await runReview(next)
+    }
+
+    /// Pure slot-filling selection, extracted for unit tests: eligible pending
+    /// PRs, oldest first, skipping anything in flight and never choosing two
+    /// PRs of the same repo (concurrent runs would collide in the managed
+    /// checkout — the "workbench has local changes" failure).
+    nonisolated public static func selectCandidates(
+        pending: [Assignment], inFlight: Set<PRKey>, slots: Int, now: Date,
+        attemptCap: Int, cooldown: TimeInterval
+    ) -> [Assignment] {
+        var chosen: [Assignment] = []
+        var busyRepos = Set(inFlight.map { $0.slug.lowercased() })
+        for a in pending {
+            if chosen.count >= slots { break }
+            if a.awaitingConfirm == true { continue }
+            if a.attempts >= attemptCap { continue }
+            if let started = a.startedAt, a.attempts > 0,
+                now < started.addingTimeInterval(cooldown) { continue }
+            if inFlight.contains(a.key) { continue }
+            let repo = a.key.slug.lowercased()
+            if busyRepos.contains(repo) { continue }
+            busyRepos.insert(repo)
+            chosen.append(a)
+        }
+        return chosen
+    }
+
+    /// Launch a review as a tracked in-flight task and reflect it in the state.
+    private func launchReview(_ assignment: Assignment, forceLive: Bool = false) {
+        let key = assignment.key
+        guard inFlight[key] == nil else { return }
+        inFlight[key] = Task { [weak self] in
+            guard let self else { return }
+            await self.runReview(assignment, forceLive: forceLive)
+            self.inFlight[key] = nil
+            self.refreshWorkState()
+            self.onChange?()
+        }
+        refreshWorkState()
+    }
+
+    /// Reflect the in-flight set in the runtime state (active when idle).
+    /// Never overrides paused/offline/error states — callers are on the
+    /// active path.
+    private func refreshWorkState() {
+        guard identityOK, !safeMode, !config.paused else { return }
+        if inFlight.isEmpty {
+            setState(.active)
+        } else {
+            setState(.reviewing(inFlight.keys.sorted { $0.description < $1.description }))
+        }
     }
 
     // MARK: - Review execution
@@ -339,7 +401,6 @@ public final class Coordinator {
             labels: assignment.labels ?? [], tierMap: activeTierProfiles, fallback: config.crProfile)
         let runTimeout = TimeInterval(
             tierLabel != nil ? config.reviewTimeoutLargeSeconds : config.reviewTimeoutSeconds)
-        setState(.reviewing(key))
         let token = UUID().uuidString
         store.update(key) {
             $0.state = .reviewing
@@ -428,7 +489,6 @@ public final class Coordinator {
         ])
         notifyOutcome(key, outcome)
         onChange?()
-        setState(.active)
     }
 
     /// Leave next-step guidance on the PR after a timeout kill. Best-effort: a
@@ -487,7 +547,6 @@ public final class Coordinator {
             notify("Review failed", "\(key) — \(reason.summary)")
         }
         onChange?()
-        if identityOK { setState(.active) }
     }
 
     /// How a `cr` failure should be read. Derived from the exit code plus the
@@ -648,9 +707,9 @@ public final class Coordinator {
 
     private func handleSleep() {
         log.info("power.sleep", [:])
-        // Let an in-flight review be interrupted; the runReview flow re-queues it,
-        // and recovery happens on wake.
-        if runner.isRunning { runner.cancelCurrent() }
+        // Let in-flight reviews be interrupted; each runReview flow re-queues its
+        // own PR, and recovery happens on wake.
+        if runner.isRunning { runner.cancelAll() }
     }
 
     private func handleWake() {
@@ -686,10 +745,8 @@ public final class Coordinator {
 
     /// Force a live review now (menu "Review now" / confirm-mode "Approve & post").
     public func reviewNow(_ key: PRKey) {
-        Task { @MainActor in
-            guard identityOK, !runner.isRunning, let a = store.get(key) else { return }
-            await runReview(a, forceLive: true)
-        }
+        guard identityOK, let a = store.get(key) else { return }
+        launchReview(a, forceLive: true)
     }
 
     public func skip(_ key: PRKey) {

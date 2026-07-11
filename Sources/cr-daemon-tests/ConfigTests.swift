@@ -8,10 +8,16 @@ func runConfigTests() {
             reviewTimeoutSeconds: 10, perPrAttemptCap: 0, dailyReviewCap: 0
         ).validated()
         suite.expect(v.searchPollIntervalSeconds >= 30)
-        suite.expect(v.maxConcurrentReviews == 1)
+        suite.expect(v.maxConcurrentReviews == 5, "parallel reviews allowed")
         suite.expect(v.reviewTimeoutSeconds >= 120)
         suite.expect(v.perPrAttemptCap >= 1)
         suite.expect(v.dailyReviewCap >= 1)
+    }
+
+    suite.test("concurrencyClampBounds") {
+        suite.expect(Config(maxConcurrentReviews: 0).validated().maxConcurrentReviews == 1)
+        suite.expect(Config(maxConcurrentReviews: 99).validated().maxConcurrentReviews == 10)
+        suite.expect(Config.default.maxConcurrentReviews == 3, "default parallelism")
     }
 
     suite.test("orgAllowlistCaseInsensitive") {
