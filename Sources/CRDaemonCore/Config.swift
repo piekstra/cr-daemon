@@ -60,7 +60,7 @@ public struct Config: Codable, Equatable, Sendable {
         coreRateFloor: Int = 500,
         searchRateFloor: Int = 5,
         maxConcurrentReviews: Int = 1,
-        reviewTimeoutSeconds: Int = 1200,
+        reviewTimeoutSeconds: Int = 3600,
         perPrAttemptCap: Int = 3,
         dailyReviewCap: Int = 50,
         notifyOn: NotifyOptions = NotifyOptions(),
