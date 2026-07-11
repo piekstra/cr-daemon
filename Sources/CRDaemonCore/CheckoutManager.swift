@@ -58,15 +58,14 @@ public final class CheckoutManager: @unchecked Sendable {
         }
 
         try? fm.createDirectory(at: Self.checkoutsDir, withIntermediateDirectories: true)
-        // Blobless partial clone: full history/trees for ref math, blobs on
-        // demand — keeps per-repo disk cost small.
+        // Full clone, not --filter=blob:none: cr prepares its workbench by
+        // locally cloning THIS repo, and a clone of a partial/promisor repo
+        // is left with missing blobs that make its pinned checkout look dirty
+        // ("pipeline: workbench has local changes").
         let r = Subprocess.run(
             "/usr/bin/git",
-            [
-                "clone", "--filter=blob:none",
-                "https://github.com/\(owner)/\(repo).git", dir.path,
-            ],
-            timeout: 300, environment: env)
+            ["clone", "https://github.com/\(owner)/\(repo).git", dir.path],
+            timeout: 600, environment: env)
         if !r.succeeded {
             log.error(
                 "checkout.clone_failed",
