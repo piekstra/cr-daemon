@@ -23,12 +23,16 @@ public enum Subprocess {
         stdin: String? = nil,
         timeout: TimeInterval? = nil,
         environment: [String: String]? = nil,
+        currentDirectory: String? = nil,
         onLaunch: ((Process) -> Void)? = nil
     ) -> SubprocessResult {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: launchPath)
         proc.arguments = args
         if let environment { proc.environment = environment }
+        if let currentDirectory {
+            proc.currentDirectoryURL = URL(fileURLWithPath: currentDirectory, isDirectory: true)
+        }
 
         let outPipe = Pipe()
         let errPipe = Pipe()

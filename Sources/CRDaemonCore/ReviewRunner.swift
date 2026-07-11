@@ -19,6 +19,7 @@ public final class ReviewRunner: @unchecked Sendable {
     private let timeout: TimeInterval
     private let log: Logger
     private let childEnv: [String: String]
+    private let checkouts: CheckoutManager
 
     private let lock = NSLock()
     private var currentProcess: Process?
@@ -35,6 +36,7 @@ public final class ReviewRunner: @unchecked Sendable {
         self.timeout = timeout
         self.log = log
         self.childEnv = ReviewRunner.childEnvironment()
+        self.checkouts = CheckoutManager(log: log, environment: self.childEnv)
     }
 
     /// Environment for `cr` (and the `claude`/`git`/`gh` it shells out to).
@@ -155,8 +157,15 @@ public final class ReviewRunner: @unchecked Sendable {
     private func execute(args: [String], key: PRKey?) async -> RunResult {
         await withCheckedContinuation { (cont: CheckedContinuation<RunResult, Never>) in
             DispatchQueue.global().async { [self] in
+                // Checkout-native cr must run from inside a clone of the repo
+                // under review; provide (and refresh) the managed clone.
+                var cwd: String?
+                if let key {
+                    cwd = checkouts.ensureCheckout(owner: key.owner, repo: key.repo)
+                }
                 let r = Subprocess.run(
                     crPath, args, timeout: timeout, environment: childEnv,
+                    currentDirectory: cwd,
                     onLaunch: { proc in
                         self.lock.lock()
                         self.currentProcess = proc
