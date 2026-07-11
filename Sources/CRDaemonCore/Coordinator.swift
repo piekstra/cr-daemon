@@ -372,6 +372,15 @@ public final class Coordinator {
             timeoutOverride: runTimeout)
 
         if result.timedOut {
+            // A timed-out run resumes cheaply via its per-PR --session (the
+            // next attempt picks up the prior run's work), so grant one more
+            // budget window before declaring the PR over-budget and posting
+            // the escalation guidance.
+            let attempts = store.get(key)?.attempts ?? config.perPrAttemptCap
+            if attempts < config.perPrAttemptCap {
+                finishFailure(key, exit: result.exitCode, error: "timed out", terminal: false)
+                return
+            }
             await postTimeoutGuidance(
                 key: key, usedLargeTier: tierLabel != nil, budgetSeconds: Int(runTimeout))
             finishFailure(key, exit: result.exitCode, error: "timed out", terminal: true)
