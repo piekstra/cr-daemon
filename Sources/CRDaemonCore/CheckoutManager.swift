@@ -54,6 +54,26 @@ public final class CheckoutManager: @unchecked Sendable {
                     "checkout.fetch_failed",
                     ["repo": "\(owner)/\(repo)", "stderr": String(r.stderr.prefix(300))])
             }
+            // Advance the checked-out default branch to origin's: cr reads
+            // repo-local trusted review agents (.codereview/) from this
+            // working tree, so a fetch-only refresh pins agents (and their
+            // prompts) to whenever the clone happened. reset --hard is safe —
+            // this clone is daemon-owned, never hand-edited — and unlike a
+            // ff-only pull it also follows force-pushed branches.
+            let branch = Subprocess.run(
+                "/usr/bin/git", ["-C", dir.path, "rev-parse", "--abbrev-ref", "HEAD"],
+                timeout: 10, environment: env
+            ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !branch.isEmpty, branch != "HEAD" {
+                let rr = Subprocess.run(
+                    "/usr/bin/git", ["-C", dir.path, "reset", "--hard", "origin/\(branch)"],
+                    timeout: 60, environment: env)
+                if !rr.succeeded {
+                    log.warn(
+                        "checkout.advance_failed",
+                        ["repo": "\(owner)/\(repo)", "stderr": String(rr.stderr.prefix(300))])
+                }
+            }
             return dir.path
         }
 
