@@ -78,9 +78,13 @@ public enum Subprocess {
             }
             if sem.wait(timeout: .now() + timeout) == .timedOut {
                 timedOut = true
-                proc.terminate()
+                // Kill the whole tree, not just the child: `cr` fans out
+                // specialist LLM subprocesses that outlive a plain terminate()
+                // and keep consuming provider capacity — enough leaked children
+                // and every later review crawls into its own timeout.
+                Self.killTree(proc.processIdentifier, signal: SIGTERM)
                 if sem.wait(timeout: .now() + 5) == .timedOut {
-                    kill(proc.processIdentifier, SIGKILL)
+                    Self.killTree(proc.processIdentifier, signal: SIGKILL)
                     sem.wait()
                 }
             }
@@ -94,5 +98,30 @@ public enum Subprocess {
             stdout: String(data: outData, encoding: .utf8) ?? "",
             stderr: String(data: errData, encoding: .utf8) ?? "",
             timedOut: timedOut)
+    }
+
+    /// Signal a process and all of its descendants, deepest first (children
+    /// are enumerated before the parent dies, since orphans reparent and
+    /// become unreachable via the parent chain).
+    public static func killTree(_ pid: Int32, signal: Int32 = SIGTERM) {
+        for child in childPids(of: pid) {
+            killTree(child, signal: signal)
+        }
+        kill(pid, signal)
+    }
+
+    private static func childPids(of pid: Int32) -> [Int32] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = ["-P", String(pid)]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = Pipe()
+        guard (try? p.run()) != nil else { return [] }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(data: data, encoding: .utf8)?
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) } ?? []
     }
 }

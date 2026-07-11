@@ -430,7 +430,14 @@ public final class Coordinator {
 
         let result = await runner.runReview(
             url: assignment.url, profile: chosenProfile, dryRun: confirm, rerun: needsRerun,
-            timeoutOverride: runTimeout)
+            timeoutOverride: runTimeout,
+            onLaunch: { pid in
+                // Record the live pid so restart reconciliation can tell a
+                // still-running review (adopt it) from a dead one (requeue it).
+                Task { @MainActor [weak self] in
+                    self?.store.update(key) { $0.crPid = pid }
+                }
+            })
 
         if result.timedOut {
             // A timed-out run resumes cheaply via its per-PR --session (the
@@ -527,6 +534,10 @@ public final class Coordinator {
             $0.lastExitCode = exit
             $0.lastError = error
             $0.crPid = nil
+            // Re-anchor the retry cooldown at the failure, not the launch: a
+            // run that outlives its own cooldown would otherwise relaunch the
+            // instant it fails (and collide with its just-killed run's lock).
+            $0.startedAt = nowFn()
             if transient { $0.attempts = min($0.attempts, 1) }
             if terminal {
                 $0.finishedAt = nowFn()
@@ -587,7 +598,11 @@ public final class Coordinator {
 
     /// Recover reviewing rows whose `cr` process died (crash/sleep/restart): try
     /// `--retry-posts` to finish partial posts; if that can't recover, re-queue.
+    /// Rows whose `cr` process is still alive are adopted instead — the run
+    /// completes on its own and posts its review; relaunching it would only
+    /// collide with its run lock.
     public func reconcileOrphans() async {
+        adoptLiveReviews()
         let orphans = store.orphanedReviewing(isPidAlive: Supervisor.isPidAlive)
         guard !orphans.isEmpty else { return }
         log.info("reconcile.orphans", ["count": orphans.count])
@@ -704,6 +719,43 @@ public final class Coordinator {
     }
 
     // MARK: - Power / network
+
+    /// Adopt reviews that survived a daemon restart: the row is `.reviewing`
+    /// and its recorded pid is alive. Hold the PR in the in-flight set (so the
+    /// scheduler won't double-launch it or its repo) and watch the pid; when
+    /// the process exits, resolve the outcome from GitHub like a normal run.
+    private func adoptLiveReviews() {
+        let live = store.reviewingWithLivePid(isPidAlive: Supervisor.isPidAlive)
+        for a in live {
+            let key = a.key
+            guard inFlight[key] == nil, let pid = a.crPid else { continue }
+            log.info("reconcile.adopted", ["pr": key.description, "pid": Int(pid)])
+            inFlight[key] = Task { [weak self] in
+                while Supervisor.isPidAlive(pid), !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 15_000_000_000)
+                }
+                guard let self else { return }
+                let reviewState = try? await self.client.latestReviewState(
+                    key, by: self.config.reviewerLogin)
+                let outcome = ReviewOutcome.from(reviewState: reviewState)
+                self.store.update(key) {
+                    $0.state = reviewState == nil ? .pending : .done
+                    $0.finishedAt = self.nowFn()
+                    $0.lastOutcome = reviewState == nil ? nil : outcome
+                    $0.crPid = nil
+                    $0.startedAt = self.nowFn()  // cooldown anchor if re-queued
+                    $0.lastSummary = "adopted run finished; review=\(reviewState ?? "none")"
+                }
+                self.store.appendEvent("review.adopted_done", [
+                    "pr": key.description, "review_state": reviewState ?? "none",
+                ])
+                self.inFlight[key] = nil
+                self.refreshWorkState()
+                self.onChange?()
+            }
+        }
+        if !live.isEmpty { refreshWorkState() }
+    }
 
     private func handleSleep() {
         log.info("power.sleep", [:])

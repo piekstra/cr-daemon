@@ -122,7 +122,7 @@ public final class ReviewRunner: @unchecked Sendable {
 
     public func runReview(
         url: String, profile: String? = nil, dryRun: Bool = false, rerun: Bool = false,
-        timeoutOverride: TimeInterval? = nil
+        timeoutOverride: TimeInterval? = nil, onLaunch: (@Sendable (Int32) -> Void)? = nil
     ) async -> RunResult {
         let p = profile ?? self.profile
         var args = ["review", url, "--profile", p, "--json", "--max-concurrency", String(maxConcurrency)]
@@ -136,7 +136,8 @@ public final class ReviewRunner: @unchecked Sendable {
         if dryRun { args.append("--dry-run") }
         if rerun { args.append("--rerun") }
         return await execute(
-            args: args, key: PRKey.parse(url: url), timeoutOverride: timeoutOverride)
+            args: args, key: PRKey.parse(url: url), timeoutOverride: timeoutOverride,
+            onLaunchPid: onLaunch)
     }
 
     /// Recovery-only: re-post any missing/failed required posts for an existing
@@ -147,20 +148,22 @@ public final class ReviewRunner: @unchecked Sendable {
             key: PRKey.parse(url: url))
     }
 
-    /// SIGTERM every in-flight `cr` process. Used on sleep; the assignments are
-    /// re-queued and recovered via `--retry-posts` on wake.
+    /// SIGTERM every in-flight `cr` process tree. Used on sleep; the
+    /// assignments are re-queued and recovered via `--retry-posts` on wake.
+    /// Tree-kill matters: cr's specialist subprocesses must not outlive it.
     public func cancelAll() {
         lock.lock()
         let procs = running.map { $0.process }
         lock.unlock()
         for p in procs {
             log.warn("review.cancel", ["pid": Int(p.processIdentifier)])
-            p.terminate()
+            Subprocess.killTree(p.processIdentifier, signal: SIGTERM)
         }
     }
 
     private func execute(
-        args: [String], key: PRKey?, timeoutOverride: TimeInterval? = nil
+        args: [String], key: PRKey?, timeoutOverride: TimeInterval? = nil,
+        onLaunchPid: (@Sendable (Int32) -> Void)? = nil
     ) async -> RunResult {
         await withCheckedContinuation { (cont: CheckedContinuation<RunResult, Never>) in
             DispatchQueue.global().async { [self] in
@@ -179,6 +182,7 @@ public final class ReviewRunner: @unchecked Sendable {
                         launched = proc
                         self.running.append((process: proc, key: key))
                         self.lock.unlock()
+                        onLaunchPid?(proc.processIdentifier)
                     })
                 self.lock.lock()
                 if let launched {

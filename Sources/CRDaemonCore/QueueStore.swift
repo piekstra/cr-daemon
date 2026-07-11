@@ -261,6 +261,17 @@ public final class QueueStore: @unchecked Sendable {
         }
     }
 
+    /// reviewing rows whose `cr` process is still alive — candidates for
+    /// adoption after a daemon restart (the run will finish on its own).
+    public func reviewingWithLivePid(isPidAlive: (Int32) -> Bool) -> [Assignment] {
+        queue.sync {
+            byKey.values.filter { a in
+                guard a.state == .reviewing, let pid = a.crPid else { return false }
+                return isPidAlive(pid)
+            }
+        }
+    }
+
     // MARK: - Daily cap accounting
 
     public func recordReviewStart() {
