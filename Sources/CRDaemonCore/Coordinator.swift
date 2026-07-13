@@ -53,6 +53,9 @@ public final class Coordinator {
     /// `config.maxConcurrentReviews`, never two PRs of the same repo (they
     /// share a managed checkout).
     private var inFlight: [PRKey: Task<Void, Never>] = [:]
+    /// Pids of adopted (restart-surviving) runs — not runner-owned, so sleep
+    /// cancellation and deadline kills must reach them explicitly.
+    private var adoptedPids: [PRKey: Int32] = [:]
     private var nextPollAt: Date = .distantPast
     private var rateLimitedUntil: Date?
     private let retryCooldown: TimeInterval = 300
@@ -724,16 +727,29 @@ public final class Coordinator {
     /// and its recorded pid is alive. Hold the PR in the in-flight set (so the
     /// scheduler won't double-launch it or its repo) and watch the pid; when
     /// the process exits, resolve the outcome from GitHub like a normal run.
+    /// Adopted runs get a fresh wall-clock deadline — the original run's
+    /// timeout died with the old daemon, and a run frozen through a sleep
+    /// cycle would otherwise squat on its slot, repo, and run lock forever.
     private func adoptLiveReviews() {
         let live = store.reviewingWithLivePid(isPidAlive: Supervisor.isPidAlive)
         for a in live {
             let key = a.key
             guard inFlight[key] == nil, let pid = a.crPid else { continue }
             log.info("reconcile.adopted", ["pr": key.description, "pid": Int(pid)])
+            adoptedPids[key] = pid
+            let deadline = nowFn().addingTimeInterval(
+                TimeInterval(config.reviewTimeoutLargeSeconds))
             inFlight[key] = Task { [weak self] in
                 while Supervisor.isPidAlive(pid), !Task.isCancelled {
+                    if let self, self.nowFn() > deadline {
+                        self.log.warn(
+                            "reconcile.adopted_timeout",
+                            ["pr": key.description, "pid": Int(pid)])
+                        Subprocess.killTree(pid, signal: SIGTERM)
+                    }
                     try? await Task.sleep(nanoseconds: 15_000_000_000)
                 }
+                self?.adoptedPids[key] = nil
                 guard let self else { return }
                 let reviewState = try? await self.client.latestReviewState(
                     key, by: self.config.reviewerLogin)
@@ -760,8 +776,13 @@ public final class Coordinator {
     private func handleSleep() {
         log.info("power.sleep", [:])
         // Let in-flight reviews be interrupted; each runReview flow re-queues its
-        // own PR, and recovery happens on wake.
+        // own PR, and recovery happens on wake. Adopted runs aren't runner-owned,
+        // so cancel them explicitly — a run frozen through sleep never finishes.
         if runner.isRunning { runner.cancelAll() }
+        for (key, pid) in adoptedPids {
+            log.warn("review.cancel_adopted", ["pr": key.description, "pid": Int(pid)])
+            Subprocess.killTree(pid, signal: SIGTERM)
+        }
     }
 
     private func handleWake() {
