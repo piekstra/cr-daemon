@@ -826,8 +826,15 @@ public final class Coordinator {
             guard inFlight[key] == nil, let pid = a.crPid else { continue }
             log.info("reconcile.adopted", ["pr": key.description, "pid": Int(pid)])
             adoptedPids[key] = pid
+            // Same tier-appropriate budget as an owned run — a healthy review
+            // finishes in well under 10 minutes, so blanket-granting the Large
+            // budget here let a stalled adopted run squat for 90 minutes.
+            let adoptedTier = Config.matchedTierLabel(
+                labels: a.labels ?? [], tierMap: activeTierProfiles)
             let deadline = nowFn().addingTimeInterval(
-                TimeInterval(config.reviewTimeoutLargeSeconds))
+                TimeInterval(
+                    adoptedTier != nil
+                        ? config.reviewTimeoutLargeSeconds : config.reviewTimeoutSeconds))
             inFlight[key] = Task { [weak self] in
                 var sentTerm = false
                 while Supervisor.isPidAlive(pid), !Task.isCancelled {
