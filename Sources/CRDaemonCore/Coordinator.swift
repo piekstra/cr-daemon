@@ -78,6 +78,12 @@ public final class Coordinator {
     /// wedged loop.
     private var lastPollAt: Date = .distantPast
     private var watchdogTask: Task<Void, Never>?
+    /// Wall-clock of daemon.start; stamps daemon.shutdown with an uptime so a
+    /// short-lived exit (something forcing us down) is legible in the log.
+    private var daemonStartedAt: Date = .distantPast
+    /// Set by the menu "Quit" so shutdown logging can tell a deliberate user quit
+    /// from an OS-delivered SIGTERM — both reach applicationWillTerminate -> stop().
+    public var userQuitRequested = false
 
     public init(
         config: Config,
@@ -103,6 +109,7 @@ public final class Coordinator {
 
     public func start(safeMode: Bool = false) {
         Paths.ensureDirectories()
+        daemonStartedAt = nowFn()
         self.safeMode = safeMode
         log.info("daemon.start", ["version": crDaemonVersion, "cr": runner.crBinaryPath, "safe_mode": safeMode])
         let rawCrVersion = runner.crVersion()
@@ -173,6 +180,17 @@ public final class Coordinator {
     }
 
     public func stop() {
+        // The one shutdown path that isn't otherwise logged: applicationWillTerminate,
+        // reached by both a user Quit and an OS SIGTERM (logout, launchctl kill,
+        // memory pressure). Record which, plus uptime — a short-lived "signal" exit
+        // is the fingerprint of something forcing us down. (watchdog.wedged and
+        // daemon.already_running already explain their own exits.)
+        let uptime = daemonStartedAt == .distantPast
+            ? -1 : Int(nowFn().timeIntervalSince(daemonStartedAt))
+        log.info(
+            "daemon.shutdown",
+            ["reason": userQuitRequested ? "user_quit" : "signal", "uptime_s": uptime])
+        log.flush()  // we're about to exit; don't let the async queue drop this line
         loopTask?.cancel()
         watchdogTask?.cancel()
         monitor.stop()
@@ -212,8 +230,10 @@ public final class Coordinator {
                 "last_poll_age_s": Int(nowFn().timeIntervalSince(lastPollAt)),
                 "action": "exit_for_relaunch",
             ])
-        // Non-zero exit → launchd (KeepAlive SuccessfulExit=false) relaunches us;
-        // startup reconciliation recovers any interrupted review.
+        // Non-zero exit → launchd (KeepAlive=true) relaunches us; startup
+        // reconciliation recovers any interrupted review. Flush first so the
+        // wedge line survives the immediate exit.
+        log.flush()
         exit(1)
     }
 

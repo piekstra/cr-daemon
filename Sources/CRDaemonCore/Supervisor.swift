@@ -1,8 +1,10 @@
 import Foundation
 
 /// Process-lifecycle guards: single-instance locking and a crash-loop circuit
-/// breaker. launchd is the primary supervisor (KeepAlive only on crash,
-/// ThrottleInterval between relaunches); these are belt-and-suspenders.
+/// breaker. launchd is the primary supervisor (KeepAlive=true relaunches on any
+/// stop, ThrottleInterval between relaunches); these are belt-and-suspenders.
+/// Because the breaker counts *every* startup (not just crashes), it also caps a
+/// pathological clean-exit loop that KeepAlive=true would otherwise relaunch.
 public enum Supervisor {
     /// Acquire an exclusive advisory lock so only one cr-daemon runs. Returns the
     /// open file descriptor (KEEP IT OPEN for the process lifetime — closing it

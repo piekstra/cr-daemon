@@ -43,7 +43,10 @@ to the configured reviewer login. This prevents the daemon from ever reviewing a
 
 ## Lifecycle & recovery
 
-- **launchd** supervises the process (`KeepAlive` only on crash, `ThrottleInterval`, `RunAtLoad`).
+- **launchd** supervises the process (`KeepAlive = true` — relaunch on any stop: crash, wedge, or
+  OS SIGTERM; `ThrottleInterval`; `RunAtLoad` at login). A user **Quit** unloads the agent
+  (`launchctl bootout`) rather than exiting, since AppKit gives a user Quit and an OS SIGTERM the
+  same clean exit code — launchd can't distinguish them, so survival must not hinge on exit code.
 - **flock** guarantees a single instance.
 - A **crash-loop guard** trips a visible safe mode after repeated rapid startups.
 - **Sleep**: in-flight `cr` is SIGTERM'd; the review is re-queued. **Wake**: wait for the network,

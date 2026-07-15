@@ -56,6 +56,12 @@ public final class Logger: @unchecked Sendable {
     public func warn(_ e: String, _ f: [String: Any] = [:]) { log(.warn, e, f) }
     public func error(_ e: String, _ f: [String: Any] = [:]) { log(.error, e, f) }
 
+    /// Block until every queued write has drained to disk. Writes are async on a
+    /// serial queue, so a line logged immediately before a deliberate `exit()` or
+    /// process teardown (daemon.shutdown, watchdog.wedged) would otherwise be lost
+    /// — the process dies before its write runs. Call this right after such a line.
+    public func flush() { queue.sync {} }
+
     private func write(ts: String, level: Level, event: String, fields: [String: Any]) {
         var obj: [String: Any] = ["ts": ts, "level": level.rawValue, "event": event]
         for (k, v) in fields { obj[k] = jsonSafe(v) }

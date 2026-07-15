@@ -5,10 +5,14 @@
   __EXEC_PATH__ and __LOG_DIR__ placeholders with absolute paths before
   installing this into ~/Library/LaunchAgents/.
 
-  KeepAlive is intentionally NOT a bare `true`: with SuccessfulExit=false +
-  Crashed=true, launchd relaunches the app only when it crashes or exits
-  nonzero — a clean user-initiated "Quit" (exit 0) stays quit. ThrottleInterval
-  prevents a relaunch storm if the app crashes on startup.
+  KeepAlive is a bare `true`: launchd relaunches the app whenever it is not
+  running — crash, wedge-exit, or an OS-initiated SIGTERM (logout, launchctl
+  kill) — so the daemon reliably survives restarts and system events. It must
+  NOT be exit-code-gated: AppKit routes both a user "Quit" and an OS SIGTERM
+  through applicationWillTerminate -> exit(0), so launchd cannot tell them apart
+  by exit code. A real user Quit instead unloads this agent (launchctl bootout),
+  which is why exit 0 alone must never be treated as "stay down."
+  ThrottleInterval prevents a relaunch storm if the app crashes on startup.
 -->
 <plist version="1.0">
 <dict>
@@ -24,12 +28,7 @@
     <true/>
 
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-        <key>Crashed</key>
-        <true/>
-    </dict>
+    <true/>
 
     <!-- Minimum seconds between (re)launches: guards against crash-loop storms. -->
     <key>ThrottleInterval</key>

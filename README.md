@@ -146,9 +146,12 @@ See [docs/rate-limiting.md](docs/rate-limiting.md).
 
 ## Laptop robustness
 
-- A **launchd LaunchAgent** supervises the process: it relaunches only on a crash
-  (`KeepAlive = { SuccessfulExit = false, Crashed = true }`), throttles relaunches, and starts at
-  login. A clean **Quit** stays quit.
+- A **launchd LaunchAgent** supervises the process: `KeepAlive = true` relaunches it whenever it
+  stops — a crash, a wedge, or an OS-initiated SIGTERM (logout, `launchctl kill`) — and it starts at
+  login (`RunAtLoad`), so it reliably survives restarts; `ThrottleInterval` guards against relaunch
+  storms. A user **Quit** unloads the agent (`launchctl bootout`) so it stays down until the next
+  login or reinstall — Quit can't be exit-code-gated, because AppKit routes both Quit and an OS
+  SIGTERM through the same clean exit.
 - A **flock single-instance lock** means launching a second copy (e.g. from Spotlight) just re-opens
   the menu — never a duplicate process.
 - A **crash-loop guard** drops into a visible "safe mode" instead of thrashing.

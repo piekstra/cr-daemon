@@ -270,5 +270,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func openData() { NSWorkspace.shared.open(Paths.appSupportDir) }
 
-    @objc private func quit() { NSApp.terminate(nil) }
+    @objc private func quit() {
+        coordinator.userQuitRequested = true  // marks the coming shutdown as deliberate
+        // Under launchd the plist uses KeepAlive=true, so a plain exit is
+        // relaunched within ~30s. A deliberate user Quit must therefore *unload*
+        // the agent (bootout) so it stays down until the next login/reinstall.
+        // launchd sends us SIGTERM as part of bootout; if that doesn't arrive
+        // (e.g. run outside launchd via `swift run`), fall through to terminate.
+        let label = "com.piekstra.cr-daemon"
+        if ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == label {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            task.arguments = ["bootout", "gui/\(getuid())/\(label)"]
+            try? task.run()
+            task.waitUntilExit()
+        }
+        NSApp.terminate(nil)
+    }
 }
