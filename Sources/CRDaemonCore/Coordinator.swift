@@ -59,10 +59,6 @@ public final class Coordinator {
     private var nextPollAt: Date = .distantPast
     private var rateLimitedUntil: Date?
     private let retryCooldown: TimeInterval = 300
-    /// A review process alive this long with no descendant processes (no LLM
-    /// specialists, ~0 CPU) is wedged — killed and re-queued rather than left to
-    /// squat until the full review timeout. Guards against orphaned/stalled runs.
-    private let reviewWedgeGrace: TimeInterval = 300
     /// label → profile routes that validated to the reviewer login at startup.
     private var activeTierProfiles: [String: String] = [:]
     /// Review-comment thread roots we've already notified about (in-memory).
@@ -764,24 +760,21 @@ public final class Coordinator {
             let deadline = nowFn().addingTimeInterval(
                 TimeInterval(config.reviewTimeoutLargeSeconds))
             inFlight[key] = Task { [weak self] in
-                var lastProgressAt = self?.nowFn() ?? Date()
                 var sentTerm = false
                 while Supervisor.isPidAlive(pid), !Task.isCancelled {
                     guard let self else { return }
-                    let now = self.nowFn()
-                    // Descendants present ⇒ the review is doing work; reset the idle
-                    // clock. Zero descendants sustained past the grace ⇒ wedged.
-                    if Subprocess.descendantCount(of: pid) > 0 { lastProgressAt = now }
-                    let idle = now.timeIntervalSince(lastProgressAt)
-                    let wedged = idle > self.reviewWedgeGrace
-                    if now > deadline || wedged {
+                    // A healthy review can't be told from a wedged one by process
+                    // tree — cr runs its reviewers as detached processes, so it has
+                    // zero descendants either way. Bound the run by the deadline
+                    // only, but escalate the kill so a run that ignores SIGTERM
+                    // doesn't survive it.
+                    if self.nowFn() > deadline {
                         if sentTerm {
-                            // Ignored SIGTERM one tick ago — force it.
                             Subprocess.killTree(pid, signal: SIGKILL)
                         } else {
                             self.log.warn(
-                                wedged ? "review.wedged" : "reconcile.adopted_timeout",
-                                ["pr": key.description, "pid": Int(pid), "idle_s": Int(idle)])
+                                "reconcile.adopted_timeout",
+                                ["pr": key.description, "pid": Int(pid)])
                             Subprocess.killTree(pid, signal: SIGTERM)
                             sentTerm = true
                         }

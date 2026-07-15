@@ -110,14 +110,6 @@ public enum Subprocess {
         kill(pid, signal)
     }
 
-    /// Total live descendant processes (children, grandchildren, …). A healthy
-    /// `cr` review fans out LLM specialist subprocesses, so a sustained count of
-    /// 0 is the fingerprint of a wedged run — the review monitor uses it to tell
-    /// a stalled run from a working one, rather than waiting out the full timeout.
-    public static func descendantCount(of pid: Int32) -> Int {
-        childPids(of: pid).reduce(0) { $0 + 1 + descendantCount(of: $1) }
-    }
-
     private static func childPids(of pid: Int32) -> [Int32] {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")

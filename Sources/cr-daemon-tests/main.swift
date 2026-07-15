@@ -13,6 +13,5 @@ runUpdaterTests()
 runFailureClassifyTests()
 runTimeoutNoticeTests()
 runSchedulerTests()
-runSubprocessTests()
 
 suite.finish()
