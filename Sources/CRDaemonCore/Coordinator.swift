@@ -70,6 +70,9 @@ public final class Coordinator {
     private var updateCheckInFlight = false
     /// Next due time for the ~30-min failed-PR retry sweep (re-attempts hourly).
     private var nextFailureRetryAt: Date = .distantPast
+    /// Next due time to re-resolve identity while latched in an identity error,
+    /// so a transient `cr me` blip (Keychain settling after a cr upgrade) recovers.
+    private var nextIdentityRecheckAt: Date = .distantPast
     /// #326 reply-check is disabled by default: it triggered a recurring control-
     /// loop stall that resisted root-causing even after bounding client timeouts
     /// and detaching the call. Re-enable once the wedge is understood.
@@ -130,34 +133,16 @@ public final class Coordinator {
         }
 
         // Hard identity guard: never let cr post as anyone but the reviewer login.
-        identityResolved = runner.resolvedIdentity()
-        identityOK = identityResolved?.caseInsensitiveCompare(config.reviewerLogin) == .orderedSame
-        if !identityOK {
-            let msg = "cr profile '\(config.crProfile)' resolves to "
-                + "\(identityResolved ?? "nil"), expected \(config.reviewerLogin)"
+        // A *transient* `cr me` failure (e.g. the Keychain ACL re-settling right
+        // after a cr upgrade — which the daemon can trigger itself) would latch
+        // this into .error for the whole session. recheckIdentityIfNeeded() in the
+        // loop re-resolves on a slow cadence and recovers once identity comes back,
+        // so no manual restart is needed.
+        if !resolveIdentityAndTiers() {
             log.error("daemon.identity_mismatch", ["resolved": identityResolved ?? "nil"])
-            runtimeState = .error(msg)
+            runtimeState = .error(identityMismatchMessage)
         }
         if safeMode { runtimeState = .safeMode(reason: "crash loop — auto-work paused") }
-
-        // Validate tier-routing profiles (e.g. cr:large → reviewer-large). Keep only
-        // those that resolve to the reviewer login; a bad/missing one is dropped so
-        // a labeled PR safely falls back to the default profile.
-        var validTiers: [String: String] = [:]
-        for (label, prof) in config.tierLabelProfiles {
-            if runner.resolvedIdentity(profile: prof)?.caseInsensitiveCompare(config.reviewerLogin)
-                == .orderedSame
-            {
-                validTiers[label] = prof
-            } else {
-                log.warn("tier_profile.invalid", ["label": label, "profile": prof])
-            }
-        }
-        activeTierProfiles = validTiers
-        if !validTiers.isEmpty {
-            log.info(
-                "tier_profiles.active", ["routes": validTiers.keys.sorted().joined(separator: ",")])
-        }
 
         monitor.onSleep = { [weak self] in Task { @MainActor in self?.handleSleep() } }
         monitor.onWake = { [weak self] in Task { @MainActor in self?.handleWake() } }
@@ -194,6 +179,56 @@ public final class Coordinator {
         loopTask?.cancel()
         watchdogTask?.cancel()
         monitor.stop()
+    }
+
+    // MARK: - Identity
+
+    private var identityMismatchMessage: String {
+        "cr profile '\(config.crProfile)' resolves to "
+            + "\(identityResolved ?? "nil"), expected \(config.reviewerLogin)"
+    }
+
+    /// Resolve the reviewer identity and validate tier-routing profiles (e.g.
+    /// cr:large → reviewer-large). Sets identityResolved/identityOK and keeps only
+    /// tier profiles that resolve to the reviewer login (a bad/missing one drops
+    /// so a labeled PR falls back to the default profile). Returns whether the
+    /// primary identity matches. Blocking (`cr me`); run at startup and, while
+    /// latched in an identity error, from the loop via recheckIdentityIfNeeded.
+    @discardableResult
+    private func resolveIdentityAndTiers() -> Bool {
+        identityResolved = runner.resolvedIdentity()
+        identityOK = identityResolved?.caseInsensitiveCompare(config.reviewerLogin) == .orderedSame
+
+        var validTiers: [String: String] = [:]
+        for (label, prof) in config.tierLabelProfiles {
+            if runner.resolvedIdentity(profile: prof)?.caseInsensitiveCompare(config.reviewerLogin)
+                == .orderedSame
+            {
+                validTiers[label] = prof
+            } else {
+                log.warn("tier_profile.invalid", ["label": label, "profile": prof])
+            }
+        }
+        activeTierProfiles = validTiers
+        if !validTiers.isEmpty {
+            log.info(
+                "tier_profiles.active", ["routes": validTiers.keys.sorted().joined(separator: ",")])
+        }
+        return identityOK
+    }
+
+    /// Self-heal a latched identity error. The startup guard can fail on a
+    /// transient `cr me` blip — most commonly the Keychain ACL re-settling right
+    /// after a cr upgrade (which the daemon's own auto-upgrade can trigger). Left
+    /// alone that strands the daemon in .error until a manual restart; here we
+    /// re-resolve on a slow cadence and recover to active once identity returns.
+    private func recheckIdentityIfNeeded() {
+        guard !identityOK, nowFn() >= nextIdentityRecheckAt else { return }
+        nextIdentityRecheckAt = nowFn().addingTimeInterval(60)
+        if resolveIdentityAndTiers() {
+            log.info("daemon.identity_recovered", ["resolved": identityResolved ?? "?"])
+            refreshWorkState()  // identityOK is now true, so this promotes .error → active
+        }
     }
 
     // MARK: - Watchdog
@@ -249,6 +284,7 @@ public final class Coordinator {
             setState(.offline)
             return
         }
+        recheckIdentityIfNeeded()  // self-heal a latched identity error before working
         let now = nowFn()
         if let until = rateLimitedUntil, now < until {
             setState(.rateLimited(until: until))
