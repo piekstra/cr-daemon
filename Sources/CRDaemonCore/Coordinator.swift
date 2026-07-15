@@ -475,6 +475,28 @@ public final class Coordinator {
         onChange?()
 
         if let detail = try? await client.pullRequest(key) {
+            // Idempotency guard: if this exact head was already reviewed (a
+            // posted outcome exists for it), don't burn another full run — a
+            // daemon restart, adoption re-queue, or a search-lag ghost
+            // re-request would otherwise re-review an unchanged PR (observed:
+            // repeated 45-minute Opus runs on an identical SHA).
+            let prior = store.get(key)
+            if let prior, let sha = detail.headSHA, prior.lastOutcome != nil,
+                prior.headShaReviewed == sha, !forceLive
+            {
+                store.update(key) {
+                    $0.state = .done
+                    $0.finishedAt = nowFn()
+                    $0.lastSummary = "skipped: head \(sha.prefix(9)) already reviewed"
+                }
+                store.appendEvent(
+                    "review.skipped_same_head",
+                    ["pr": key.description, "sha": String(sha.prefix(9))])
+                setState(.active)
+                refreshWorkState()
+                onChange?()
+                return
+            }
             store.update(key) {
                 $0.headShaReviewed = detail.headSHA
                 $0.headShaSeen = detail.headSHA
@@ -676,6 +698,14 @@ public final class Coordinator {
                     $0.lastOutcome = outcome
                     $0.crPid = nil
                     $0.lastSummary = "recovered via retry-posts; review=\(reviewState ?? "none")"
+                }
+            } else if a.lastOutcome != nil, a.headShaReviewed == a.headShaSeen,
+                a.headShaReviewed != nil
+            {
+                store.update(a.key) {
+                    $0.state = .done
+                    $0.crPid = nil
+                    $0.lastSummary = "interrupted, but head already reviewed — not re-queued"
                 }
             } else {
                 store.update(a.key) {
