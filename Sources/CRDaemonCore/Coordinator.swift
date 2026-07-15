@@ -460,6 +460,34 @@ public final class Coordinator {
             labels: assignment.labels ?? [], tierMap: activeTierProfiles, fallback: config.crProfile)
         let runTimeout = TimeInterval(
             tierLabel != nil ? config.reviewTimeoutLargeSeconds : config.reviewTimeoutSeconds)
+        // Head + our prior review, fetched up front (both are needed below anyway).
+        let detail = try? await client.pullRequest(key)
+        let priorReview = try? await client.latestReviewState(key, by: config.reviewerLogin)
+
+        // No-op guard: GitHub can keep listing a PR as review-requested after we
+        // post a COMMENTED/CHANGES_REQUESTED review, and discovery treats any
+        // still-listed done PR past the settle window as a re-request. Without
+        // this check that loops forever: requeue → review → done → requeue,
+        // burning an attempt, a daily-cap slot, and a cr spawn every few minutes.
+        // Same head + review already posted ⇒ no new work; finish quietly. A
+        // prior APPROVED still gets the deliberate fresh pass (--rerun) below,
+        // and a moved head reviews normally.
+        if !confirm, let d = detail, let prior = priorReview,
+            prior.uppercased() != "APPROVED",
+            store.get(key)?.headShaReviewed == d.headSHA
+        {
+            store.update(key) {
+                $0.state = .done
+                $0.finishedAt = nowFn()
+                $0.lastOutcome = ReviewOutcome.from(reviewState: prior)
+                $0.crPid = nil
+            }
+            store.appendEvent(
+                "review.noop_same_head", ["pr": key.description, "review_state": prior])
+            log.info("review.noop_same_head", ["pr": key.description, "review_state": prior])
+            return
+        }
+
         let token = UUID().uuidString
         store.update(key) {
             $0.state = .reviewing
@@ -474,7 +502,7 @@ public final class Coordinator {
             "review.start", ["pr": key.description, "confirm": confirm, "profile": chosenProfile])
         onChange?()
 
-        if let detail = try? await client.pullRequest(key) {
+        if let detail {
             store.update(key) {
                 $0.headShaReviewed = detail.headSHA
                 $0.headShaSeen = detail.headSHA
@@ -484,7 +512,6 @@ public final class Coordinator {
         // cr exits early if the reviewer has already approved (even on a stale
         // approval). So if a prior approval exists, force a fresh pass — otherwise
         // a re-requested review would be a no-op instead of a real re-review.
-        let priorReview = try? await client.latestReviewState(key, by: config.reviewerLogin)
         let needsRerun = priorReview?.uppercased() == "APPROVED"
 
         let result = await runner.runReview(
