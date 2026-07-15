@@ -709,6 +709,12 @@ public final class Coordinator {
                     $0.state = .pending
                     $0.crPid = nil
                     $0.lastError = "recovered after interruption — re-queued"
+                    // An interruption (daemon restart/sleep) is not the PR's
+                    // fault. At the cap the row would be permanently
+                    // unrunnable-pending — the queue filter skips attempts >=
+                    // cap but only .failed rows get swept — so pin below the
+                    // cap to guarantee at least one more real attempt.
+                    $0.attempts = min($0.attempts, self.config.perPrAttemptCap - 1)
                 }
             }
         }
