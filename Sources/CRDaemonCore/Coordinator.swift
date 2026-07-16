@@ -525,12 +525,18 @@ public final class Coordinator {
             url: assignment.url, profile: chosenProfile, dryRun: confirm, rerun: needsRerun,
             timeoutOverride: runTimeout, onLaunch: onLaunch)
 
-        // cr refuses to resume a session whose inputs changed underneath it (a
-        // prior run killed mid-flight, new commits, or new PR discussion) and
-        // asks for --rerun. That's recoverable right now, not a real failure —
-        // without this retry the PR burned attempts on the same error for hours.
+        // Two stale-session cases are recoverable right now with a fresh pass,
+        // not real failures — without this retry the PR burns attempts on the
+        // identical error every lap:
+        // - cr refuses to resume a session whose inputs changed underneath it
+        //   ("input fingerprint changed; pass --rerun").
+        // - claude can't find a session created under a different transport or
+        //   cleaned up since ("No conversation found with session ID") — e.g.
+        //   the ledger holds a bg-mode session id but reviews now run foreground.
+        let combined = result.stderr + result.stdout
         if !confirm, !needsRerun, !result.succeeded,
-            (result.stderr + result.stdout).contains("input fingerprint changed")
+            combined.contains("input fingerprint changed")
+                || combined.contains("No conversation found with session ID")
         {
             log.info("review.rerun_fingerprint", ["pr": key.description])
             store.appendEvent("review.rerun_fingerprint", ["pr": key.description])
