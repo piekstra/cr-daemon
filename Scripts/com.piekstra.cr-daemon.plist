@@ -49,6 +49,11 @@
         <!-- cr and gh live in Homebrew's bin; launchd starts with a bare PATH. -->
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- Run Claude review tasks as plain foreground children (cr >= 0.10.258).
+             The CLI's background job service intermittently kills sessions without
+             writing state, starving reviews; foreground transport avoids it. -->
+        <key>CR_CLAUDE_FOREGROUND</key>
+        <string>1</string>
     </dict>
 </dict>
 </plist>
