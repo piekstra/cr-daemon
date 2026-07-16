@@ -514,16 +514,30 @@ public final class Coordinator {
         // a re-requested review would be a no-op instead of a real re-review.
         let needsRerun = priorReview?.uppercased() == "APPROVED"
 
-        let result = await runner.runReview(
+        let onLaunch: @Sendable (Int32) -> Void = { pid in
+            // Record the live pid so restart reconciliation can tell a
+            // still-running review (adopt it) from a dead one (requeue it).
+            Task { @MainActor [weak self] in
+                self?.store.update(key) { $0.crPid = pid }
+            }
+        }
+        var result = await runner.runReview(
             url: assignment.url, profile: chosenProfile, dryRun: confirm, rerun: needsRerun,
-            timeoutOverride: runTimeout,
-            onLaunch: { pid in
-                // Record the live pid so restart reconciliation can tell a
-                // still-running review (adopt it) from a dead one (requeue it).
-                Task { @MainActor [weak self] in
-                    self?.store.update(key) { $0.crPid = pid }
-                }
-            })
+            timeoutOverride: runTimeout, onLaunch: onLaunch)
+
+        // cr refuses to resume a session whose inputs changed underneath it (a
+        // prior run killed mid-flight, new commits, or new PR discussion) and
+        // asks for --rerun. That's recoverable right now, not a real failure —
+        // without this retry the PR burned attempts on the same error for hours.
+        if !confirm, !needsRerun, !result.succeeded,
+            (result.stderr + result.stdout).contains("input fingerprint changed")
+        {
+            log.info("review.rerun_fingerprint", ["pr": key.description])
+            store.appendEvent("review.rerun_fingerprint", ["pr": key.description])
+            result = await runner.runReview(
+                url: assignment.url, profile: chosenProfile, dryRun: confirm, rerun: true,
+                timeoutOverride: runTimeout, onLaunch: onLaunch)
+        }
 
         if result.timedOut {
             // A timed-out run resumes cheaply via its per-PR --session (the
@@ -656,12 +670,20 @@ public final class Coordinator {
     public nonisolated static func classifyFailure(exit: Int32, error: String) -> FailureReason {
         // Compact one-line summary: the last non-empty line of cr's output tail
         // (the GetPR/upstream message), already redaction-scrubbed upstream.
-        let summary = String(
+        var summary = String(
             (error.split(whereSeparator: \.isNewline).last.map(String.init) ?? error)
                 .trimmingCharacters(in: .whitespaces).prefix(160))
         let e = error.lowercased()
         let kind: FailureKind
-        if e.contains("timed out") || e.contains("timeout") {
+        if e.contains("background job timed out"), e.contains("starting") {
+            // The LLM job never left "starting" before its task deadline: the
+            // provider queued/starved it — the fingerprint of subscription
+            // capacity / usage-window exhaustion under heavy parallel load, not
+            // anything wrong with the PR. Upstream ⇒ retries don't burn the
+            // terminal attempt cap; it clears when the usage window resets.
+            kind = .upstream
+            summary += " — likely provider capacity/usage limit; retries until it clears"
+        } else if e.contains("timed out") || e.contains("timeout") {
             kind = .timeout
         } else if e.contains("status 401") || e.contains("status 403")
             || e.contains("unauthorized") || e.contains("forbidden")

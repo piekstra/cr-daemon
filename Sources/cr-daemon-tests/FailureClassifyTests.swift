@@ -34,6 +34,23 @@ func runFailureClassifyTests() {
         suite.expect(Coordinator.classifyFailure(exit: -1, error: "timed out").kind == .timeout)
     }
 
+    suite.test("classifyStuckStartingJobIsUpstreamCapacity") {
+        // A job that never left "starting" before its task deadline means the
+        // provider queued/starved it (usage-window exhaustion) — upstream, so
+        // retries don't burn the terminal cap. Must NOT fall into .timeout
+        // even though the message contains "timed out".
+        let err =
+            "llm subprocess: Claude background job timed out: starting…: context deadline exceeded"
+        let r = Coordinator.classifyFailure(exit: 1, error: err)
+        suite.expect(r.kind == .upstream, "stuck-at-starting is capacity, not a review timeout")
+        suite.expect(r.summary.contains("capacity"), "summary carries the capacity hint")
+        // A mid-run bg timeout (job progressed past starting) stays a timeout.
+        let mid = Coordinator.classifyFailure(
+            exit: 1,
+            error: "llm subprocess: Claude background job timed out: running: context deadline exceeded")
+        suite.expect(mid.kind == .timeout)
+    }
+
     suite.test("classifyAuth") {
         suite.expect(
             Coordinator.classifyFailure(exit: 1, error: "github: status 403 forbidden").kind == .auth)
