@@ -43,7 +43,7 @@ func runFailureClassifyTests() {
             "llm subprocess: Claude background job timed out: starting…: context deadline exceeded"
         let r = Coordinator.classifyFailure(exit: 1, error: err)
         suite.expect(r.kind == .upstream, "stuck-at-starting is capacity, not a review timeout")
-        suite.expect(r.summary.contains("capacity"), "summary carries the capacity hint")
+        suite.expect(r.summary.contains("session stall"), "summary names the stall")
         // A mid-run bg timeout (job progressed past starting) stays a timeout.
         let mid = Coordinator.classifyFailure(
             exit: 1,

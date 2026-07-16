@@ -676,13 +676,14 @@ public final class Coordinator {
         let e = error.lowercased()
         let kind: FailureKind
         if e.contains("background job timed out"), e.contains("starting") {
-            // The LLM job never left "starting" before its task deadline: the
-            // provider queued/starved it — the fingerprint of subscription
-            // capacity / usage-window exhaustion under heavy parallel load, not
-            // anything wrong with the PR. Upstream ⇒ retries don't burn the
-            // terminal attempt cap; it clears when the usage window resets.
+            // The LLM job never reported a state before its task deadline. In
+            // practice the session often did start and then died mid-turn on the
+            // CLI/provider side without ever writing its state file — a stall in
+            // the layer below cr, not anything wrong with the PR. Upstream ⇒
+            // retries don't burn the terminal attempt cap, and completed sibling
+            // tasks are banked in cr's ledger, so successive retries converge.
             kind = .upstream
-            summary += " — likely provider capacity/usage limit; retries until it clears"
+            summary += " — provider/CLI session stall; retrying (completed tasks are reused)"
         } else if e.contains("timed out") || e.contains("timeout") {
             kind = .timeout
         } else if e.contains("status 401") || e.contains("status 403")
