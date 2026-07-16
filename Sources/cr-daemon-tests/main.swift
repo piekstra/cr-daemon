@@ -13,5 +13,6 @@ runUpdaterTests()
 runFailureClassifyTests()
 runTimeoutNoticeTests()
 runSchedulerTests()
+runRetryRequeueFlagTests()
 
 suite.finish()

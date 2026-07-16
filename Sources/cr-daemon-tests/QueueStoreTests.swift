@@ -149,3 +149,30 @@ func runQueueStoreTests() {
         suite.expect(reopened.all().first?.key.description == "piekstra/a#1")
     }
 }
+
+func runRetryRequeueFlagTests() {
+    suite.test("sweepRequeueMarksRetryNotRerequest") {
+        let (s, e) = tempURLs()
+        let store = QueueStore(stateURL: s, eventsURL: e, now: { Date(timeIntervalSince1970: 2_000_000) })
+        let a = store.upsertDiscovered(pr("piekstra", "sweep", 1), org: "piekstra")
+        store.update(a.key) { $0.state = .failed; $0.finishedAt = Date(timeIntervalSince1970: 1_000) }
+        _ = store.retryEligibleFailures(now: Date(timeIntervalSince1970: 2_000_000), backoff: 3600)
+        suite.expect(store.get(a.key)?.retryRequeue == true, "sweep requeue must be marked automatic")
+
+        // A later rediscovery (real re-request) clears the marker: settle the row
+        // as done first so upsertDiscovered treats reappearance as a re-request.
+        store.update(a.key) { $0.state = .done; $0.finishedAt = Date(timeIntervalSince1970: 1_000) }
+        _ = store.upsertDiscovered(pr("piekstra", "sweep", 1), org: "piekstra")
+        suite.expect(store.get(a.key)?.state == .pending, "rediscovered done row requeues")
+        suite.expect(store.get(a.key)?.retryRequeue == nil, "discovery requeue is a real re-request")
+    }
+
+    suite.test("upgradeResetMarksRetryNotRerequest") {
+        let (s, e) = tempURLs()
+        let store = QueueStore(stateURL: s, eventsURL: e)
+        let a = store.upsertDiscovered(pr("piekstra", "upgrade", 2), org: "piekstra")
+        store.update(a.key) { $0.state = .failed }
+        _ = store.resetFailedForRetry()
+        suite.expect(store.get(a.key)?.retryRequeue == true)
+    }
+}

@@ -470,10 +470,15 @@ public final class Coordinator {
         // this check that loops forever: requeue → review → done → requeue,
         // burning an attempt, a daily-cap slot, and a cr spawn every few minutes.
         // Same head + review already posted ⇒ no new work; finish quietly. A
-        // prior APPROVED still gets the deliberate fresh pass (--rerun) below,
-        // and a moved head reviews normally.
+        // prior APPROVED still gets the deliberate fresh pass (--rerun) below —
+        // unless this row was re-queued by an automatic retry sweep, which is
+        // never a human re-request: an existing approval fully satisfies it
+        // (observed live: an already-approved heavy PR was redundantly
+        // re-reviewed for 30 minutes after a sweep). A moved head reviews
+        // normally either way.
+        let sweepRetry = store.get(key)?.retryRequeue == true
         if !confirm, let d = detail, let prior = priorReview,
-            prior.uppercased() != "APPROVED",
+            prior.uppercased() != "APPROVED" || sweepRetry,
             store.get(key)?.headShaReviewed == d.headSHA
         {
             store.update(key) {

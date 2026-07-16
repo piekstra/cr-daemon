@@ -73,6 +73,11 @@ public struct Assignment: Codable, Equatable, Sendable {
     public var lastSummary: String?
     /// GitHub labels on the PR (used to route, e.g. `cr:large` → Opus profile).
     public var labels: [String]?
+    /// True when this row was re-queued by an automatic retry sweep (failure
+    /// sweep or cr-upgrade reset) rather than by discovery. A sweep retry is
+    /// never a human re-request, so an already-posted review at the same head —
+    /// including an approval — satisfies it (no redundant re-review).
+    public var retryRequeue: Bool?
 
     public var discoveredAt: Date
     public var startedAt: Date?

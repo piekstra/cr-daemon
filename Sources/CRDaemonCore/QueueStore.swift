@@ -143,6 +143,7 @@ public final class QueueStore: @unchecked Sendable {
                     existing.lastError = nil
                     existing.attempts = 0  // a re-request is fresh work
                     existing.startedAt = nil  // clear the retry cooldown
+                    existing.retryRequeue = nil  // discovery = a real re-request
                     appendEventLocked("assignment.requeued", ["pr": id])
                 }
                 byKey[id] = existing
@@ -216,6 +217,7 @@ public final class QueueStore: @unchecked Sendable {
                 x.startedAt = nil
                 x.finishedAt = nil
                 x.updatedAt = now
+                x.retryRequeue = true  // automatic retry, not a re-request
                 byKey[id] = x
                 appendEventLocked("assignment.retry_failure", ["pr": id])
                 reset += 1
@@ -239,6 +241,7 @@ public final class QueueStore: @unchecked Sendable {
                 x.startedAt = nil
                 x.finishedAt = nil
                 x.updatedAt = now()
+                x.retryRequeue = true  // automatic retry, not a re-request
                 byKey[id] = x
                 appendEventLocked("assignment.retry_failure", ["pr": id])
                 reset += 1
