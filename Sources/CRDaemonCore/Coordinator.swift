@@ -371,14 +371,17 @@ public final class Coordinator {
         let slots = config.maxConcurrentReviews - inFlight.count
         guard slots > 0 else { return }
         let started24h = store.reviewStartsInLast24h()
-        if started24h >= config.dailyReviewCap {
+        // dailyReviewCap == 0 disables the runaway guard entirely (no cap).
+        let capEnabled = config.dailyReviewCap > 0
+        if capEnabled && started24h >= config.dailyReviewCap {
             log.warn("review.daily_cap", ["cap": config.dailyReviewCap])
             return
         }
+        let capSlots = capEnabled ? min(slots, config.dailyReviewCap - started24h) : slots
         let picks = Coordinator.selectCandidates(
             pending: store.pending(),
             inFlight: Set(inFlight.keys),
-            slots: min(slots, config.dailyReviewCap - started24h),
+            slots: capSlots,
             now: nowFn(),
             attemptCap: config.perPrAttemptCap,
             cooldown: retryCooldown)

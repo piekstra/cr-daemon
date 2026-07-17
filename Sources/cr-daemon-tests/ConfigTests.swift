@@ -11,7 +11,12 @@ func runConfigTests() {
         suite.expect(v.maxConcurrentReviews == 5, "parallel reviews allowed")
         suite.expect(v.reviewTimeoutSeconds >= 120)
         suite.expect(v.perPrAttemptCap >= 1)
-        suite.expect(v.dailyReviewCap >= 1)
+        // 0 is preserved: it means "no daily cap" (the runaway guard is disabled).
+        suite.expect(v.dailyReviewCap == 0, "dailyReviewCap 0 = unlimited")
+        // A negative cap normalizes to 0 (unlimited) rather than a positive floor.
+        suite.expect(Config(dailyReviewCap: -5).validated().dailyReviewCap == 0)
+        // A real positive cap survives validation unchanged.
+        suite.expect(Config(dailyReviewCap: 200).validated().dailyReviewCap == 200)
     }
 
     suite.test("concurrencyClampBounds") {

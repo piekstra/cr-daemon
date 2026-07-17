@@ -49,7 +49,7 @@ public struct Config: Codable, Equatable, Sendable {
     public var timeoutGuidanceComment: Bool
     public var reviewMaxConcurrency: Int // cr --max-concurrency (parallel specialist reviewers)
     public var perPrAttemptCap: Int      // attempts before quarantining a PR as failed
-    public var dailyReviewCap: Int       // global runaway guard
+    public var dailyReviewCap: Int       // global runaway guard; 0 = unlimited (no cap)
 
     public var notifyOn: NotifyOptions
     public var paused: Bool
@@ -188,7 +188,8 @@ public struct Config: Codable, Equatable, Sendable {
         c.reviewTimeoutLargeSeconds = max(c.reviewTimeoutSeconds, c.reviewTimeoutLargeSeconds)
         c.reviewMaxConcurrency = min(8, max(1, c.reviewMaxConcurrency))
         c.perPrAttemptCap = max(1, c.perPrAttemptCap)
-        c.dailyReviewCap = max(1, c.dailyReviewCap)
+        // 0 (or negative) means "no daily cap" — the runaway guard is disabled.
+        c.dailyReviewCap = max(0, c.dailyReviewCap)
         c.coreRateFloor = max(0, c.coreRateFloor)
         c.searchRateFloor = max(0, c.searchRateFloor)
         c.orgs = c.orgs.map { $0.lowercased() }
