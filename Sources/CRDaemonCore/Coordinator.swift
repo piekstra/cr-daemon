@@ -80,6 +80,12 @@ public final class Coordinator {
     /// Wall-clock of the last completed poll; the watchdog uses it to detect a
     /// wedged loop.
     private var lastPollAt: Date = .distantPast
+    /// Same instant on the awake-only clock (ProcessInfo.systemUptime pauses
+    /// during system sleep). The watchdog must measure staleness on this clock:
+    /// wall-clock jumps across a nap made it fire false wedges the moment the
+    /// machine woke (observed: maintenance sleep 19:43→19:59 ⇒ spurious
+    /// exit-for-relaunch at wake).
+    private var lastPollUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
     private var watchdogTask: Task<Void, Never>?
     /// Wall-clock of daemon.start; stamps daemon.shutdown with an uptime so a
     /// short-lived exit (something forcing us down) is legible in the log.
@@ -161,6 +167,7 @@ public final class Coordinator {
         }
 
         lastPollAt = nowFn()
+        lastPollUptime = ProcessInfo.processInfo.systemUptime
         startWatchdog()
     }
 
@@ -253,9 +260,10 @@ public final class Coordinator {
         if let until = rateLimitedUntil, nowFn() < until { return false }
         // Polls run every ~searchPollIntervalSeconds (default 90s). Reviews no
         // longer block the loop (they run as tracked tasks), so polling must
-        // stay fresh even while reviewing — five minutes of silence means the
-        // loop is wedged, not merely between polls.
-        return nowFn().timeIntervalSince(lastPollAt) > 300
+        // stay fresh even while reviewing — five minutes of AWAKE silence means
+        // the loop is wedged, not merely between polls. Awake-only clock: time
+        // spent asleep must not count, or every nap ends in a spurious relaunch.
+        return ProcessInfo.processInfo.systemUptime - lastPollUptime > 300
     }
 
     private func recoverFromWedge() {
@@ -311,6 +319,7 @@ public final class Coordinator {
                 nextPollAt = now.addingTimeInterval(jitteredInterval())
             }
             lastPollAt = now
+            lastPollUptime = ProcessInfo.processInfo.systemUptime
             onChange?()
         }
 
