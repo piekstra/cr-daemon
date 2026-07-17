@@ -188,6 +188,28 @@ public actor GitHubClient {
         return mine.last?["state"] as? String
     }
 
+    /// Latest review by `login` with the commit it was submitted against.
+    /// The commit matters: a review at an old head must never satisfy a check
+    /// for the current head (force-pushes replace the reviewed commits while a
+    /// locally-stamped "reviewed SHA" can be poisoned by failed attempts that
+    /// stamp before reviewing). Core bucket.
+    public func latestReview(_ key: PRKey, by login: String) async throws
+        -> (state: String, commitSHA: String?)?
+    {
+        let resp = try await request(
+            path: "/repos/\(key.owner)/\(key.repo)/pulls/\(key.number)/reviews",
+            query: [URLQueryItem(name: "per_page", value: "100")],
+            resource: .core, useConditional: false)
+        guard let arr = try? JSONSerialization.jsonObject(with: resp.data) as? [[String: Any]]
+        else { throw GitHubError.decode("reviews body not an array") }
+        let mine = arr.filter {
+            (($0["user"] as? [String: Any])?["login"] as? String)?.caseInsensitiveCompare(login)
+                == .orderedSame
+        }
+        guard let last = mine.last, let state = last["state"] as? String else { return nil }
+        return (state: state, commitSHA: last["commit_id"] as? String)
+    }
+
     /// Cheap identity probe used to re-validate the token after wake.
     @discardableResult
     public func currentUserLogin() async throws -> String? {

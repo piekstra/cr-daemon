@@ -465,7 +465,8 @@ public final class Coordinator {
             tierLabel != nil ? config.reviewTimeoutLargeSeconds : config.reviewTimeoutSeconds)
         // Head + our prior review, fetched up front (both are needed below anyway).
         let detail = try? await client.pullRequest(key)
-        let priorReview = try? await client.latestReviewState(key, by: config.reviewerLogin)
+        let prior = (try? await client.latestReview(key, by: config.reviewerLogin)) ?? nil
+        let priorReview = prior?.state
 
         // No-op guard: GitHub can keep listing a PR as review-requested after we
         // post a COMMENTED/CHANGES_REQUESTED review, and discovery treats any
@@ -480,19 +481,25 @@ public final class Coordinator {
         // re-reviewed for 30 minutes after a sweep). A moved head reviews
         // normally either way.
         let sweepRetry = store.get(key)?.retryRequeue == true
-        if !confirm, let d = detail, let prior = priorReview,
-            prior.uppercased() != "APPROVED" || sweepRetry,
-            store.get(key)?.headShaReviewed == d.headSHA
+        if !confirm, let d = detail, let prior,
+            prior.state.uppercased() != "APPROVED" || sweepRetry,
+            // The review must be AT the current head, per GitHub itself. The
+            // locally-stamped headShaReviewed is written when an attempt starts,
+            // so failed attempts poison it — after a force-push it can equal the
+            // new head while the actual review sits on replaced commits
+            // (observed live: a force-pushed PR was wrongly settled as reviewed).
+            prior.commitSHA == d.headSHA
         {
             store.update(key) {
                 $0.state = .done
                 $0.finishedAt = nowFn()
-                $0.lastOutcome = ReviewOutcome.from(reviewState: prior)
+                $0.lastOutcome = ReviewOutcome.from(reviewState: prior.state)
                 $0.crPid = nil
             }
             store.appendEvent(
-                "review.noop_same_head", ["pr": key.description, "review_state": prior])
-            log.info("review.noop_same_head", ["pr": key.description, "review_state": prior])
+                "review.noop_same_head", ["pr": key.description, "review_state": prior.state])
+            log.info(
+                "review.noop_same_head", ["pr": key.description, "review_state": prior.state])
             return
         }
 
