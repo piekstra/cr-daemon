@@ -541,10 +541,14 @@ public final class Coordinator {
         // - claude can't find a session created under a different transport or
         //   cleaned up since ("No conversation found with session ID") — e.g.
         //   the ledger holds a bg-mode session id but reviews now run foreground.
+        // - the named session was minted under a different model ("model
+        //   mismatch: stored …") — e.g. sessions from the Sonnet-4.6 era after
+        //   the profile moved to Sonnet 5.
         let combined = result.stderr + result.stdout
         if !confirm, !needsRerun, !result.succeeded,
             combined.contains("input fingerprint changed")
                 || combined.contains("No conversation found with session ID")
+                || combined.contains("model mismatch: stored")
         {
             log.info("review.rerun_fingerprint", ["pr": key.description])
             store.appendEvent("review.rerun_fingerprint", ["pr": key.description])
