@@ -31,6 +31,6 @@
     <true/>
 
     <key>NSHumanReadableCopyright</key>
-    <string>MIT License. See the project repository for details.</string>
+    <string>Copyright (C) 2026 Caleb Piekstra. Licensed under AGPL-3.0-only. See the project repository for details.</string>
 </dict>
 </plist>
