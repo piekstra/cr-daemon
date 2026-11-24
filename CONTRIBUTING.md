@@ -59,4 +59,4 @@ given kind of change).
 Use the issue templates. For security-sensitive reports, see [SECURITY.md](SECURITY.md) instead of a
 public issue.
 
-By contributing you agree your contributions are licensed under the [MIT License](LICENSE).
+By contributing you agree your contributions are licensed under the [AGPL-3.0-only license](LICENSE).
